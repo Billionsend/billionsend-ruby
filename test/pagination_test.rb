@@ -38,4 +38,28 @@ class PaginationTest < Minitest::Test
     enum.first
     assert_equal 1, mock.calls.size
   end
+
+  def test_a_page_without_a_data_array_raises
+    [{ "object" => "list", "has_more" => false }, { "object" => "list", "data" => nil, "has_more" => false },
+     { "object" => "list", "data" => {}, "has_more" => false }, [1, 2]].each do |answer|
+      m = Contract::Mock.new
+      m.respond("GET", "/contacts", body: JSON.generate(answer), headers: { "content-type" => "application/json" })
+      c = BillionSend::Client.new(api_key: Contract::API_KEY, base_url: Contract::BASE_URL, transport: m)
+      error = assert_raises(BillionSend::Error) { c.contacts.list_all.to_a }
+      assert_equal "The list page has no data array", error.message
+      assert_equal "application_error", error.name
+      assert_nil error.status_code
+    end
+  end
+
+  def test_a_page_whose_last_item_has_no_id_hands_out_its_items_then_raises
+    page = page(["00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002"], true)
+    page["data"].last.delete("id")
+    mock.respond("GET", "/contacts", body: JSON.generate(page), headers: { "content-type" => "application/json" })
+    got = []
+    error = assert_raises(BillionSend::Error) { client.contacts.list_all.each { |c| got << c } }
+    assert_equal "The last item of the list page has no id to continue from", error.message
+    assert_equal 2, got.size
+    assert_equal 1, mock.calls.size
+  end
 end
