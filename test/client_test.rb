@@ -33,8 +33,9 @@ class ClientTest < Minitest::Test
   def test_a_request_without_a_key_fails_before_sending
     with_env("BILLIONSEND_API_KEY" => nil) do
       c = BillionSend::Client.new(base_url: Contract::BASE_URL, transport: mock)
-      error = assert_raises(BillionSend::Error) { c.domains.list }
+      error = assert_raises(BillionSend::AuthenticationError) { c.domains.list }
       assert_equal "missing_api_key", error.name
+      assert_nil error.status_code
       assert_empty mock.calls
     end
   end

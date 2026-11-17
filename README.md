@@ -107,7 +107,7 @@ Waiting for a sign-in code sent to the inbox is one call: `client.inboxes.codes.
 - `BillionSend::InboxStreamEvent`: `id` (the stream position), `event` (such as `"inbox.email.received"`) and `data`, a Hash with `"type"`, `"created_at"`, `"inbox_id"` and `"data"` (the webhook payload of the same event).
 - `BillionSend::StreamGapEvent`: `event == "stream.gap"`, `id` is `nil` and `data["reason"]` says why. The stream was resumed from a position older than the 24 hours the API replays, so some events may be missing: catch up through the lists (`client.inboxes.threads.list_all(inbox_id, read: false)`) before going on. It is handed out once per position.
 
-The method opens the stream, so a refused stream (a revoked key, a key held to one inbox asking for the team's stream) raises at once. The server ends a stream every few minutes and connections drop; the stream reconnects on its own with `Last-Event-ID`, so no event is lost or repeated. `max_reconnects:` bounds consecutive failed reconnects (default 5, `0` turns reconnecting off; 429 answers wait for their `Retry-After`). An error that reconnecting cannot fix is raised from the loop. One inbox's stream ends after that inbox's `inbox.deleted` or `inbox.expired` event. Close the stream when done (`stream.close`).
+The method opens the stream, so a refused stream (a revoked key, a key held to one inbox asking for the team's stream) raises at once. The server ends a stream every few minutes and connections drop; the stream reconnects on its own with `Last-Event-ID`, so no event is lost or repeated. Before reconnecting it waits a second (or what the server's `retry` field asks). `max_reconnects:` (default 5) bounds the disconnects in a row without an event in between: past it, iterating raises `BillionSend::APIConnectionError` ("gave up after N reconnects"). A reconnect the API refuses for good, such as a revoked key, raises its own error. One inbox's stream ends after that inbox's `inbox.deleted` or `inbox.expired` event. Close the stream when done (`stream.close`).
 
 To pick up where a process left off, keep `stream.last_event_id` and pass it back:
 
@@ -156,6 +156,8 @@ With Rack or Sinatra, `request.get_header("HTTP_WEBHOOK_ID")` and so on read the
 | `inboxes.agent`, `.safety`, `.labels`, `.codes`, `.quarantine`, `.drafts` | inbox settings, labels, verification codes, held mail, drafts |
 | `inboxes.threads` (`.labels`, `.emails`) | list, search, get, update, delete; thread labels; messages, reply and forward |
 | `agent` | signup, status, claim_email |
+
+A few resources have a method named `send` (`emails.send`, `inboxes.send`, `broadcasts.send`), as their `operationId`s say; it hides `Object#send` on those objects, so reach other methods of a resource dynamically with `public_send` or `__send__`.
 
 Each method is named after its operation's `operationId` in the API document: `emails.receiving.attachments.list` is `client.emails.receiving.attachments.list`, with camelCase written in snake_case (`agent.claimEmail` is `client.agent.claim_email`). An `operationId` that is also the group of others is that group's `call`: `emails.metrics` (beside `emails.metrics.links`, `.countries` and `.clients`) is `client.emails.metrics.call(metrics: ["sent", "delivered"])`, or `client.emails.metrics.(…)`.
 
@@ -212,7 +214,7 @@ A request is retried when repeating it is safe: GET, PUT and DELETE, and any req
 
 | Argument | Environment | Default |
 | --- | --- | --- |
-| `api_key:` | `BILLIONSEND_API_KEY` | none (only `agent.signup` works without one) |
+| `api_key:` | `BILLIONSEND_API_KEY` | none (only `agent.signup` works without one; any other call raises `AuthenticationError`, `missing_api_key`) |
 | `base_url:` | `BILLIONSEND_BASE_URL` | `https://api.billionsend.com` |
 | `timeout:` | | `60` seconds per attempt (an event stream waits at least 60 s for each read) |
 | `max_retries:` | | `2` |

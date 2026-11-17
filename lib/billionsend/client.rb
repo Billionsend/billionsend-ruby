@@ -192,7 +192,8 @@ module BillionSend
       out = { "Accept" => accept, "User-Agent" => "billionsend-ruby/#{VERSION}" }
       if auth
         if @api_key.nil? || @api_key.empty?
-          raise Error.new("No API key: pass api_key: or set BILLIONSEND_API_KEY", name: "missing_api_key")
+          raise AuthenticationError.new("No API key: pass api_key: or set BILLIONSEND_API_KEY",
+                                        name: "missing_api_key")
         end
 
         out["Authorization"] = "Bearer #{@api_key}"

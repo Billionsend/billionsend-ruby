@@ -88,8 +88,33 @@ class EventStreamTest < Minitest::Test
     stream_answer(TEAM, [frame("1", "inbox.email.received")])
     3.times { mock.error("GET", TEAM, 503, "unavailable", "Try later") }
     stream = client.inboxes.events.stream(max_reconnects: 2)
-    assert_raises(BillionSend::APIError) { stream.each { nil } }
-    assert_equal [1.0, 1.0, 2.0], sleeps
+    error = assert_raises(BillionSend::APIConnectionError) { stream.each { nil } }
+    assert_equal "The event stream disconnected; gave up after 2 reconnects", error.message
+    assert_equal [1.0, 1.0], sleeps
+  end
+
+  def test_connections_that_close_at_once_are_given_up_on
+    3.times { stream_answer(TEAM, []) }
+    stream = client.inboxes.events.stream(max_reconnects: 2)
+    assert_raises(BillionSend::APIConnectionError) { stream.each { nil } }
+    assert_equal 3, mock.calls.size
+  end
+
+  def test_an_event_starts_the_count_again
+    # Without the reset, the 3rd disconnect would pass max_reconnects 2.
+    stream_answer(TEAM, [])
+    stream_answer(TEAM, [frame("1", "inbox.email.received")])
+    stream_answer(TEAM, [])
+    stream_answer(TEAM, [frame("2", "inbox.email.received")])
+    stream = client.inboxes.events.stream(max_reconnects: 2)
+    assert_equal %w[1 2], stream.first(2).map(&:id)
+  end
+
+  def test_a_refused_reconnect_raises_its_own_error
+    stream_answer(TEAM, [frame("1", "inbox.email.received")])
+    mock.error("GET", TEAM, 401, "invalid_api_key", "Revoked")
+    stream = client.inboxes.events.stream
+    assert_raises(BillionSend::AuthenticationError) { stream.each { nil } }
   end
 
   def test_without_reconnects_a_dropped_connection_raises

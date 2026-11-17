@@ -138,8 +138,10 @@ module BillionSend
   # Iterating yields {InboxStreamEvent} and {StreamGapEvent} objects; when the
   # server ends the stream (it does so every few minutes) or the connection
   # drops, the stream reconnects with Last-Event-ID set to the last id it saw
-  # and resumes without losing events. +max_reconnects+ bounds the consecutive
-  # failed reconnect attempts (0 turns reconnecting off).
+  # and resumes without losing events, waiting a second (or the server's retry
+  # field) first. After +max_reconnects+ disconnects in a row without an event
+  # in between, iterating raises {APIConnectionError}; a reconnect the API
+  # refuses for good (a revoked key) raises its own error.
   #
   # The server replays at most 24 hours of missed events. A stream resumed from
   # an older id first gets a {StreamGapEvent}: events may be missing, so read
@@ -152,7 +154,6 @@ module BillionSend
     include Enumerable
 
     DEFAULT_RETRY = 1.0
-    MAX_RECONNECT_DELAY = 30.0
     GAP_EVENT = "stream.gap"
     TEAM_STREAM_PATH = "/inboxes/events"
     # After one of these, the server ends an inbox's own stream for good.
@@ -188,36 +189,45 @@ module BillionSend
     def each
       return enum_for(:each) unless block_given?
 
+      # Disconnects since the last event; any event starts the count again.
+      failures = 0
       until @closed
-        reconnect if @response.nil?
-        response = @response
-        decoder = SSEDecoder.new
-        error = nil
-        begin
-          response.each_chunk do |chunk|
-            decoder.feed(chunk).each do |sse|
-              event = saw(sse)
-              yield event if event
+        if @response
+          response = @response
+          decoder = SSEDecoder.new
+          begin
+            response.each_chunk do |chunk|
+              decoder.feed(chunk).each do |sse|
+                failures = 0
+                event = saw(sse)
+                yield event if event
+                break if @closed
+              end
               break if @closed
             end
-            break if @closed
+            # Every event was handed out; an id sent without data still moves the position.
+            @last_event_id = decoder.last_event_id if !@closed && decoder.last_event_id
+          rescue APIConnectionError
+            nil # the connection dropped: reconnect below
+          ensure
+            @retry = decoder.retry_ms / 1000.0 if decoder.retry_ms
+            response.close
+            @response = nil
           end
-          @last_event_id = decoder.last_event_id if !@closed && decoder.last_event_id
-        rescue APIConnectionError => e
-          error = e
-        ensure
-          @retry = decoder.retry_ms / 1000.0 if decoder.retry_ms
-          response.close
-          @response = nil
         end
         return if @closed
 
-        if @max_reconnects.zero?
-          raise error if error
-
-          return
+        failures += 1
+        if failures > @max_reconnects
+          raise APIConnectionError, "The event stream disconnected; gave up after #{@max_reconnects} reconnects"
         end
+
         @client.pause(@retry)
+        begin
+          open
+        rescue APIConnectionError, RateLimitError, APIError
+          nil # counted as one more disconnect on the next turn
+        end
       end
     end
 
@@ -228,27 +238,6 @@ module BillionSend
     end
 
     private
-
-    def reconnect
-      failures = 0
-      begin
-        open
-      rescue APIConnectionError, RateLimitError, APIError => e
-        failures += 1
-        raise if failures > @max_reconnects
-
-        @client.pause(failure_delay(failures, e))
-        retry
-      end
-    end
-
-    def failure_delay(failures, error)
-      if error.is_a?(RateLimitError) && error.retry_after
-        return [error.retry_after, MAX_RECONNECT_DELAY].min
-      end
-
-      [@retry * (2.0**(failures - 1)), MAX_RECONNECT_DELAY].min
-    end
 
     # The event to hand out for +sse+, or nil for a repeated gap.
     def saw(sse)
