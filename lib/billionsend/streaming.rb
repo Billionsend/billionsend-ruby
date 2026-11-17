@@ -139,9 +139,11 @@ module BillionSend
   # server ends the stream (it does so every few minutes) or the connection
   # drops, the stream reconnects with Last-Event-ID set to the last id it saw
   # and resumes without losing events, waiting a second (or the server's retry
-  # field) first. After +max_reconnects+ disconnects in a row without an event
-  # in between, iterating raises {APIConnectionError}; a reconnect the API
-  # refuses for good (a revoked key) raises its own error.
+  # field) first. A connection that opens starts the count again, however
+  # quiet the inbox; after +max_reconnects+ reconnects in a row that fail to
+  # open, iterating raises {APIConnectionError}; a reconnect the API refuses
+  # for good (a revoked key) raises its own error. An error raised by the
+  # block passes through as it is.
   #
   # The server replays at most 24 hours of missed events. A stream resumed from
   # an older id first gets a {StreamGapEvent}: events may be missing, so read
@@ -189,18 +191,24 @@ module BillionSend
     def each
       return enum_for(:each) unless block_given?
 
-      # Disconnects since the last event; any event starts the count again.
+      # The end of the last open connection, then each reconnect that failed to open.
       failures = 0
       until @closed
         if @response
+          failures = 0
           response = @response
           decoder = SSEDecoder.new
+          # Set while the block runs: its errors are the caller's, not a dropped connection.
+          in_block = false
           begin
             response.each_chunk do |chunk|
               decoder.feed(chunk).each do |sse|
-                failures = 0
                 event = saw(sse)
-                yield event if event
+                next unless event
+
+                in_block = true
+                yield event
+                in_block = false
                 break if @closed
               end
               break if @closed
@@ -208,6 +216,8 @@ module BillionSend
             # Every event was handed out; an id sent without data still moves the position.
             @last_event_id = decoder.last_event_id if !@closed && decoder.last_event_id
           rescue APIConnectionError
+            raise if in_block
+
             nil # the connection dropped: reconnect below
           ensure
             @retry = decoder.retry_ms / 1000.0 if decoder.retry_ms

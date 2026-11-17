@@ -93,21 +93,43 @@ class EventStreamTest < Minitest::Test
     assert_equal [1.0, 1.0], sleeps
   end
 
-  def test_connections_that_close_at_once_are_given_up_on
-    3.times { stream_answer(TEAM, []) }
-    stream = client.inboxes.events.stream(max_reconnects: 2)
-    assert_raises(BillionSend::APIConnectionError) { stream.each { nil } }
-    assert_equal 3, mock.calls.size
+  def test_a_quiet_inbox_keeps_reconnecting
+    # The server ends a stream every ten minutes; a quiet inbox gets only keepalives.
+    8.times { stream_answer(TEAM, [": keepalive\n\n"]) }
+    stream_answer(TEAM, [frame("1", "inbox.email.received")])
+    stream = client.inboxes.events.stream(max_reconnects: 1)
+    assert_equal %w[1], stream.first(1).map(&:id)
+    assert_equal 9, mock.calls.size
+    assert_equal [1.0] * 8, sleeps
   end
 
-  def test_an_event_starts_the_count_again
-    # Without the reset, the 3rd disconnect would pass max_reconnects 2.
+  def test_a_connection_that_opens_starts_the_count_again
+    # Without the reset, the 3rd failed reconnect would pass max_reconnects 2.
     stream_answer(TEAM, [])
+    2.times do
+      mock.error("GET", TEAM, 503, "unavailable", "Try later")
+      stream_answer(TEAM, [])
+    end
+    mock.error("GET", TEAM, 503, "unavailable", "Try later")
     stream_answer(TEAM, [frame("1", "inbox.email.received")])
-    stream_answer(TEAM, [])
-    stream_answer(TEAM, [frame("2", "inbox.email.received")])
     stream = client.inboxes.events.stream(max_reconnects: 2)
-    assert_equal %w[1 2], stream.first(2).map(&:id)
+    assert_equal %w[1], stream.first(1).map(&:id)
+  end
+
+  def test_the_blocks_connection_error_is_not_a_disconnect
+    stream_answer(TEAM, [frame("1", "inbox.email.received"), frame("2", "inbox.email.received")])
+    stream = client.inboxes.events.stream
+    got = []
+    error = assert_raises(BillionSend::APIConnectionError) do
+      stream.each do |event|
+        got << event.id
+        raise BillionSend::APIConnectionError, "the reply failed"
+      end
+    end
+    assert_equal "the reply failed", error.message
+    assert_equal %w[1], got
+    assert_equal 1, mock.calls.size
+    assert(mock.streams.all?(&:closed))
   end
 
   def test_a_refused_reconnect_raises_its_own_error
