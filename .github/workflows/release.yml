@@ -1,0 +1,42 @@
+name: release
+
+# Publishes the billionsend gem to RubyGems at the version lib/billionsend/version.rb
+# declares, via Trusted Publishing (OIDC): no key is stored. Run it by hand
+# (Actions → release → Run workflow) on a version tag. RubyGems accepts a
+# pending trusted publisher for a gem that does not exist yet, so the first
+# version can go through this workflow too; see "Releasing" in the README.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment: rubygems
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+      # Only a tag that names the gem's version publishes, so the number on
+      # RubyGems always matches a commit of this repository.
+      - name: The ref is the version tag
+        run: |
+          version=$(ruby -Ilib -e 'require "billionsend/version"; print BillionSend::VERSION')
+          if [ "$GITHUB_REF" != "refs/tags/v$version" ]; then
+            echo "Run this workflow on the tag v$version (got $GITHUB_REF)" >&2
+            exit 1
+          fi
+      - name: Checks
+        run: bundle exec rake
+      - name: Build
+        run: gem build billionsend.gemspec
+      - uses: rubygems/configure-rubygems-credentials@v1.0.0
+      - name: Push
+        run: gem push billionsend-*.gem

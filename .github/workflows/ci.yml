@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Tests (Ruby ${{ matrix.ruby }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        ruby: ["3.1", "3.2", "3.3", "3.4"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          bundler-cache: true
+      - name: Generated code matches the OpenAPI snapshot
+        run: bundle exec ruby script/generate.rb --check
+      - name: Tests (warnings on)
+        run: bundle exec rake test
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+      - run: gem build billionsend.gemspec
+      - name: The gem installs and loads with nothing else
+        run: |
+          gem install --local billionsend-*.gem
+          ruby -e 'require "billionsend"; puts BillionSend::VERSION; BillionSend::Client.new(api_key: "bs_x").emails'
