@@ -17,8 +17,7 @@ Gem::Specification.new do |spec|
     "homepage_uri" => spec.homepage,
     "source_code_uri" => spec.homepage,
     "changelog_uri" => "#{spec.homepage}/blob/main/CHANGELOG.md",
-    "documentation_uri" => "https://billionsend.com/docs",
-    "rubygems_mfa_required" => "true"
+    "documentation_uri" => "https://billionsend.com/docs"
   }
 
   spec.files = Dir["lib/**/*.rb"] + %w[README.md CHANGELOG.md LICENSE]

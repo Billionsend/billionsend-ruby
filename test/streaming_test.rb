@@ -88,8 +88,8 @@ class EventStreamTest < Minitest::Test
     stream_answer(TEAM, [frame("1", "inbox.email.received")])
     3.times { mock.error("GET", TEAM, 503, "unavailable", "Try later") }
     stream = client.inboxes.events.stream(max_reconnects: 2)
-    error = assert_raises(BillionSend::APIConnectionError) { stream.each { nil } }
-    assert_equal "The event stream disconnected; gave up after 2 reconnects", error.message
+    error = assert_raises(BillionSend::APIError) { stream.each { nil } }
+    assert_equal "Try later", error.message
     assert_equal [1.0, 1.0], sleeps
   end
 
@@ -130,6 +130,34 @@ class EventStreamTest < Minitest::Test
     assert_equal %w[1], got
     assert_equal 1, mock.calls.size
     assert(mock.streams.all?(&:closed))
+  end
+
+  def test_a_refused_reconnect_waits_its_retry_after_and_raises_the_apis_error
+    stream_answer(TEAM, [frame("1", "inbox.email.received")])
+    3.times { mock.error("GET", TEAM, 429, "too_many_streams", "Too many open streams", headers: { "retry-after" => "5" }) }
+    stream = client.inboxes.events.stream(max_reconnects: 2)
+    error = assert_raises(BillionSend::RateLimitError) { stream.each { nil } }
+    assert_equal "too_many_streams", error.name
+    assert_equal [1.0, 5.0], sleeps
+  end
+
+  def test_a_retry_after_over_a_minute_raises_at_once
+    stream_answer(TEAM, [frame("1", "inbox.email.received")])
+    mock.error("GET", TEAM, 503, "unavailable", "Down for maintenance", headers: { "retry-after" => "120" })
+    stream = client.inboxes.events.stream
+    assert_raises(BillionSend::APIError) { stream.each { nil } }
+    assert_equal [1.0], sleeps
+    assert_equal 2, mock.calls.size
+  end
+
+  def test_reconnects_that_get_no_answer_raise_a_connection_error
+    stream_answer(TEAM, [frame("1", "inbox.email.received")])
+    mock.error("GET", TEAM, 429, "too_many_streams", "Too many open streams", headers: { "retry-after" => "2" })
+    2.times { mock.fail("GET", TEAM, BillionSend::APIConnectionError.new("Connection refused")) }
+    stream = client.inboxes.events.stream(max_reconnects: 2)
+    error = assert_raises(BillionSend::APIConnectionError) { stream.each { nil } }
+    assert_equal "The event stream disconnected; gave up after 2 reconnects", error.message
+    assert_equal [1.0, 2.0], sleeps
   end
 
   def test_a_refused_reconnect_raises_its_own_error

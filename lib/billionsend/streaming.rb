@@ -140,10 +140,13 @@ module BillionSend
   # drops, the stream reconnects with Last-Event-ID set to the last id it saw
   # and resumes without losing events, waiting a second (or the server's retry
   # field) first. A connection that opens starts the count again, however
-  # quiet the inbox; after +max_reconnects+ reconnects in a row that fail to
-  # open, iterating raises {APIConnectionError}; a reconnect the API refuses
-  # for good (a revoked key) raises its own error. An error raised by the
-  # block passes through as it is.
+  # quiet the inbox. A reconnect the API answers with a 429 or 5xx waits what
+  # its Retry-After asks (one over 60 seconds raises that error at once). After
+  # +max_reconnects+ reconnects in a row that fail to open, iterating raises
+  # the API's error for the last one ({RateLimitError}, {APIError}), or
+  # {APIConnectionError} when it got no answer; a reconnect the API refuses for
+  # good (a revoked key) raises its own error. An error raised by the block
+  # passes through as it is.
   #
   # The server replays at most 24 hours of missed events. A stream resumed from
   # an older id first gets a {StreamGapEvent}: events may be missing, so read
@@ -193,9 +196,13 @@ module BillionSend
 
       # The end of the last open connection, then each reconnect that failed to open.
       failures = 0
+      # The API's answer to the last failed reconnect, and the wait it asked for.
+      last_error = nil
+      wait = nil
       until @closed
         if @response
           failures = 0
+          last_error = nil
           response = @response
           decoder = SSEDecoder.new
           # Set while the block runs: its errors are the caller's, not a dropped connection.
@@ -229,14 +236,21 @@ module BillionSend
 
         failures += 1
         if failures > @max_reconnects
+          raise last_error if last_error
+
           raise APIConnectionError, "The event stream disconnected; gave up after #{@max_reconnects} reconnects"
         end
 
-        @client.pause(@retry)
+        @client.pause(wait || @retry)
         begin
           open
-        rescue APIConnectionError, RateLimitError, APIError
-          nil # counted as one more disconnect on the next turn
+        rescue APIConnectionError
+          last_error = wait = nil # no answer: counted on the next turn
+        rescue RateLimitError, APIError => e
+          wait = e.response && Client.retry_after(e.response)
+          raise if wait && wait > Client::MAX_RETRY_DELAY
+
+          last_error = e
         end
       end
     end
