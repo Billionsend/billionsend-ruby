@@ -131,6 +131,25 @@ module BillionSend
         end
       end
 
+      # Update an API key.
+      #
+      # Renames the key. Its permission, domain and inbox scope never change: mint a new key for
+      # another scope. A key held to one domain updates only keys held to that same domain; any
+      # other key is not found.
+      #
+      # +PATCH /api-keys/{id}+
+      #
+      # @return [Hash] the parsed JSON answer
+      def update(id, params, extra_headers: nil, timeout: nil)
+        @client.request(
+          "PATCH",
+          "/api-keys/#{Client.encode_path(id)}",
+          body: params,
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+
       # Delete an API key.
       #
       # A key held to one domain deletes only keys held to that same domain; any other key is not
@@ -159,7 +178,7 @@ module BillionSend
 
     # Operations on audiences contacts.
     class AudiencesContacts < Base
-      # Create a contact.
+      # Create a contact in an audience.
       #
       # +POST /audiences/{audienceId}/contacts+
       #
@@ -174,7 +193,7 @@ module BillionSend
         )
       end
 
-      # Retrieve a contact.
+      # Retrieve a contact in an audience.
       #
       # +GET /audiences/{audienceId}/contacts/{id}+
       #
@@ -188,7 +207,7 @@ module BillionSend
         )
       end
 
-      # Update a contact.
+      # Update a contact in an audience.
       #
       # +PATCH /audiences/{audienceId}/contacts/{id}+
       #
@@ -203,7 +222,7 @@ module BillionSend
         )
       end
 
-      # Delete a contact.
+      # Delete a contact from an audience.
       #
       # +DELETE /audiences/{audienceId}/contacts/{id}+
       #
@@ -213,6 +232,413 @@ module BillionSend
           "DELETE",
           "/audiences/#{Client.encode_path(audience_id)}/contacts/#{Client.encode_path(id)}",
           query: { "erase" => erase },
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+    end
+
+    # Operations on automations.
+    class Automations < Base
+      # @return [AutomationsRuns]
+      def runs
+        @runs ||= AutomationsRuns.new(@client)
+      end
+
+      # Create an automation.
+      #
+      # Steps and connections are checked on every write; a draft may be incomplete. With status
+      # enabled the whole automation is checked, including that its templates, sender domains,
+      # topics and segments exist (422 with each problem and its JSON Pointer). An agent key can
+      # only write drafts (403).
+      #
+      # +POST /automations+
+      #
+      # @return [Hash] the parsed JSON answer
+      def create(params, extra_headers: nil, timeout: nil)
+        @client.request(
+          "POST",
+          "/automations",
+          body: params,
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+
+      # List automations.
+      #
+      # Newest first, with cursor pagination: `after` takes the last id of a page and pages toward
+      # older items, `before` takes the first id and pages back toward newer ones.
+      #
+      # +GET /automations+
+      #
+      # @return [Hash] the parsed JSON answer
+      def list(limit: nil, after: nil, before: nil, status: nil, extra_headers: nil, timeout: nil)
+        @client.request(
+          "GET",
+          "/automations",
+          query: { "limit" => limit, "after" => after, "before" => before, "status" => status },
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+
+      # Every item of +list+, as an Enumerator that fetches pages as it goes. Walks in the list's
+      # own order, from +after+ (or the first page) on; pass +before+ instead to walk the other way.
+      #
+      # @return [Enumerator<Hash>]
+      def list_all(
+        limit: nil,
+        after: nil,
+        before: nil,
+        status: nil,
+        extra_headers: nil,
+        timeout: nil
+      )
+        Pagination.each_item(after: after, before: before) do |page_after, page_before|
+          @client.request(
+            "GET",
+            "/automations",
+            query: {
+              "limit" => limit,
+              "after" => page_after,
+              "before" => page_before,
+              "status" => status
+            },
+            extra_headers: extra_headers,
+            timeout: timeout
+          )
+        end
+      end
+
+      # Retrieve an automation.
+      #
+      # +GET /automations/{id}+
+      #
+      # @return [Hash] the parsed JSON answer
+      def get(id, extra_headers: nil, timeout: nil)
+        @client.request(
+          "GET",
+          "/automations/#{Client.encode_path(id)}",
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+
+      # Update an automation.
+      #
+      # Name, status and/or steps with connections. Changing the steps adds a version; runs already
+      # going keep the version they started on. An enabled automation's steps cannot change (409):
+      # stop it first, or give status disabled in the same request, or duplicate it. Enabling checks
+      # the whole automation (422 with each problem and its JSON Pointer); an agent key cannot
+      # enable (403).
+      #
+      # +PATCH /automations/{id}+
+      #
+      # @return [Hash] the parsed JSON answer
+      def update(id, params, extra_headers: nil, timeout: nil)
+        @client.request(
+          "PATCH",
+          "/automations/#{Client.encode_path(id)}",
+          body: params,
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+
+      # Remove an automation.
+      #
+      # Removes the automation and its versions at once; runs still going are not executed any more,
+      # and its run history is deleted in the background.
+      #
+      # +DELETE /automations/{id}+
+      #
+      # @return [Hash] the parsed JSON answer
+      def remove(id, extra_headers: nil, timeout: nil)
+        @client.request(
+          "DELETE",
+          "/automations/#{Client.encode_path(id)}",
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+
+      # Duplicate an automation.
+      #
+      # A new automation named "<name> (copy)", disabled, with the same steps and connections.
+      #
+      # +POST /automations/{id}/duplicate+
+      #
+      # @return [Hash] the parsed JSON answer
+      def duplicate(id, extra_headers: nil, timeout: nil)
+        @client.request(
+          "POST",
+          "/automations/#{Client.encode_path(id)}/duplicate",
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+
+      # Stop an automation.
+      #
+      # Sets the automation to disabled: no new runs start; runs already going finish. Stopping a
+      # stopped automation answers the same.
+      #
+      # +POST /automations/{id}/stop+
+      #
+      # @return [Hash] the parsed JSON answer
+      def stop(id, extra_headers: nil, timeout: nil)
+        @client.request(
+          "POST",
+          "/automations/#{Client.encode_path(id)}/stop",
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+
+      # Validate an automation document.
+      #
+      # BillionSend extension. Checks steps and connections without storing anything. Always answers
+      # 200 with every problem found: layer draft are the problems that stop a save (the same check
+      # as every write), layer enable are what stops enabling (a trigger, reachability, and that the
+      # templates, sender domains, topics and segments exist; reported only for a document that can
+      # be saved). Each has a JSON Pointer path into the submitted document, a stable code and a
+      # suggestion.
+      #
+      # +POST /automations/validate+
+      #
+      # @return [Hash] the parsed JSON answer
+      def validate(params, extra_headers: nil, timeout: nil)
+        @client.request(
+          "POST",
+          "/automations/validate",
+          body: params,
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+
+      # Simulate a run of an automation.
+      #
+      # BillionSend extension. Works out one contact's pass through the automation's current steps
+      # without running anything: which way each step goes, when, and the mail it would send. The
+      # clock is the simulation's own: delays and waits move it, so a flow of days answers at once.
+      # Waits take the events given, in order. Nothing is sent, stored or counted. Send steps are
+      # checked against the published template, the sender domain, the topic, the recipient's
+      # opt-outs and the suppression list; the team's send quota, reputation holds and reviews are
+      # decided only when mail is really accepted. contact_update changes a copy of the contact for
+      # the steps after it. Works on a draft too, if it has a trigger.
+      #
+      # +POST /automations/{id}/simulate+
+      #
+      # @return [Hash] the parsed JSON answer
+      def simulate(id, params, extra_headers: nil, timeout: nil)
+        @client.request(
+          "POST",
+          "/automations/#{Client.encode_path(id)}/simulate",
+          body: params,
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+
+      # Metrics of an automation.
+      #
+      # BillionSend extension. What the statistics store counted for the automation in a period
+      # (default the last seven UTC days): runs started, completed, failed and cancelled; the
+      # results of the mail it sent; and for every step of the current version the people who
+      # entered, finished, failed in and skipped it. Counts follow the sink loop within seconds.
+      #
+      # +GET /automations/{id}/metrics+
+      #
+      # @return [Hash] the parsed JSON answer
+      def metrics(id, start_date: nil, end_date: nil, extra_headers: nil, timeout: nil)
+        @client.request(
+          "GET",
+          "/automations/#{Client.encode_path(id)}/metrics",
+          query: { "start_date" => start_date, "end_date" => end_date },
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+    end
+
+    # Operations on automations runs.
+    class AutomationsRuns < Base
+      # List the runs of an automation.
+      #
+      # Newest first, with cursor pagination: `after` takes the last id of a page and pages toward
+      # older items, `before` takes the first id and pages back toward newer ones. status keeps runs
+      # in any of the comma-separated statuses (running, completed, failed, cancelled).
+      #
+      # +GET /automations/{id}/runs+
+      #
+      # @return [Hash] the parsed JSON answer
+      def list(
+        id,
+        limit: nil,
+        after: nil,
+        before: nil,
+        status: nil,
+        extra_headers: nil,
+        timeout: nil
+      )
+        @client.request(
+          "GET",
+          "/automations/#{Client.encode_path(id)}/runs",
+          query: { "limit" => limit, "after" => after, "before" => before, "status" => status },
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+
+      # Every item of +list+, as an Enumerator that fetches pages as it goes. Walks in the list's
+      # own order, from +after+ (or the first page) on; pass +before+ instead to walk the other way.
+      #
+      # @return [Enumerator<Hash>]
+      def list_all(
+        id,
+        limit: nil,
+        after: nil,
+        before: nil,
+        status: nil,
+        extra_headers: nil,
+        timeout: nil
+      )
+        Pagination.each_item(after: after, before: before) do |page_after, page_before|
+          @client.request(
+            "GET",
+            "/automations/#{Client.encode_path(id)}/runs",
+            query: {
+              "limit" => limit,
+              "after" => page_after,
+              "before" => page_before,
+              "status" => status
+            },
+            extra_headers: extra_headers,
+            timeout: timeout
+          )
+        end
+      end
+
+      # Retrieve a run of an automation.
+      #
+      # The run with every step of its automation's version: the steps that ran in the order they
+      # ran, with their output and error, then the rest as pending (still reachable) or skipped.
+      #
+      # +GET /automations/{id}/runs/{run_id}+
+      #
+      # @return [Hash] the parsed JSON answer
+      def get(id, run_id, extra_headers: nil, timeout: nil)
+        @client.request(
+          "GET",
+          "/automations/#{Client.encode_path(id)}/runs/#{Client.encode_path(run_id)}",
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+
+      # Cancel a run of an automation.
+      #
+      # BillionSend extension. Ends a running run as cancelled: its waiting step is skipped and
+      # nothing more happens for it. Mail the run already queued is not recalled. A run that is
+      # already completed, failed or cancelled answers 409.
+      #
+      # +POST /automations/{id}/runs/{run_id}/cancel+
+      #
+      # @return [Hash] the parsed JSON answer
+      def cancel(id, run_id, extra_headers: nil, timeout: nil)
+        @client.request(
+          "POST",
+          "/automations/#{Client.encode_path(id)}/runs/#{Client.encode_path(run_id)}/cancel",
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+    end
+
+    # Operations on brand.
+    class Brand < Base
+      # @return [BrandLogo]
+      def logo
+        @logo ||= BrandLogo.new(@client)
+      end
+
+      # Retrieve the brand defaults.
+      #
+      # BillionSend extension. The team's brand defaults for its hosted unsubscribe pages (the
+      # dashboard's Settings → Brand): the logo, accent color, font, footer address and the two
+      # footer switches. A domain's own `unsubscribe_page` overrides any of them.
+      #
+      # +GET /brand+
+      #
+      # @return [Hash] the parsed JSON answer
+      def get(extra_headers: nil, timeout: nil)
+        @client.request(
+          "GET",
+          "/brand",
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+
+      # Update the brand defaults.
+      #
+      # BillionSend extension. Changes the team's brand defaults; fields not sent keep their value,
+      # null clears one. Needs a key made by an owner or admin (as the dashboard's Brand settings
+      # do).
+      #
+      # +PATCH /brand+
+      #
+      # @return [Hash] the parsed JSON answer
+      def update(params = nil, extra_headers: nil, timeout: nil)
+        @client.request(
+          "PATCH",
+          "/brand",
+          body: params,
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+    end
+
+    # Operations on brand logo.
+    class BrandLogo < Base
+      # Upload the team logo.
+      #
+      # BillionSend extension. Sets the team's logo, the one every domain's unsubscribe page shows
+      # unless the domain has its own (PUT /domains/{id}/unsubscribe-page/logo), and the team's
+      # picture in the dashboard; it replaces any earlier one. Send the image as
+      # `multipart/form-data` in a field named `file`: PNG, JPEG or WebP, judged from the bytes, at
+      # most 2 MiB. Needs a key made by an owner or admin.
+      #
+      # +PUT /brand/logo+
+      #
+      # @return [Hash] the parsed JSON answer
+      def upload(params, extra_headers: nil, timeout: nil)
+        @client.request(
+          "PUT",
+          "/brand/logo",
+          form: params,
+          files: %w[file],
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+
+      # Remove the team logo.
+      #
+      # BillionSend extension. Removes the team's logo; pages of domains without a logo of their own
+      # then show none. Removing a logo that is not there succeeds. Needs a key made by an owner or
+      # admin.
+      #
+      # +DELETE /brand/logo+
+      #
+      # @return [Hash] the parsed JSON answer
+      def delete(extra_headers: nil, timeout: nil)
+        @client.request(
+          "DELETE",
+          "/brand/logo",
           extra_headers: extra_headers,
           timeout: timeout
         )
@@ -311,6 +737,123 @@ module BillionSend
           extra_headers: extra_headers,
           timeout: timeout
         )
+      end
+
+      # List broadcast recipients.
+      #
+      # The recipients of a broadcast that had one outcome: `type` (required) is sent, delivered,
+      # opened, clicked, bounced, complained, unsubscribed or suppressed. `email` narrows to one
+      # address; `bounce_type` (permanent, transient or undetermined) narrows bounces. Read from the
+      # delivery records, newest recipient first. Newest first, with cursor pagination: `after`
+      # takes the last id of a page and pages toward older items, `before` takes the first id and
+      # pages back toward newer ones.
+      #
+      # +GET /broadcasts/{id}/recipients+
+      #
+      # @return [Hash] the parsed JSON answer
+      def recipients(
+        id,
+        limit: nil,
+        after: nil,
+        before: nil,
+        type:,
+        email: nil,
+        bounce_type: nil,
+        extra_headers: nil,
+        timeout: nil
+      )
+        @client.request(
+          "GET",
+          "/broadcasts/#{Client.encode_path(id)}/recipients",
+          query: {
+            "limit" => limit,
+            "after" => after,
+            "before" => before,
+            "type" => type,
+            "email" => email,
+            "bounce_type" => bounce_type
+          },
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+
+      # Every item of +recipients+, as an Enumerator that fetches pages as it goes. Walks in the
+      # list's own order, from +after+ (or the first page) on; pass +before+ instead to walk the
+      # other way.
+      #
+      # @return [Enumerator<Hash>]
+      def recipients_all(
+        id,
+        limit: nil,
+        after: nil,
+        before: nil,
+        type:,
+        email: nil,
+        bounce_type: nil,
+        extra_headers: nil,
+        timeout: nil
+      )
+        Pagination.each_item(after: after, before: before) do |page_after, page_before|
+          @client.request(
+            "GET",
+            "/broadcasts/#{Client.encode_path(id)}/recipients",
+            query: {
+              "limit" => limit,
+              "after" => page_after,
+              "before" => page_before,
+              "type" => type,
+              "email" => email,
+              "bounce_type" => bounce_type
+            },
+            extra_headers: extra_headers,
+            timeout: timeout
+          )
+        end
+      end
+
+      # List broadcast clicked links.
+      #
+      # The links recipients clicked in a broadcast, most clicked first, from the statistics (the
+      # same counts as `GET /emails/metrics/links`). Newest first, with cursor pagination: `after`
+      # takes the last id of a page and pages toward older items, `before` takes the first id and
+      # pages back toward newer ones.
+      #
+      # +GET /broadcasts/{id}/clicked-links+
+      #
+      # @return [Hash] the parsed JSON answer
+      def clicked_links(id, limit: nil, after: nil, before: nil, extra_headers: nil, timeout: nil)
+        @client.request(
+          "GET",
+          "/broadcasts/#{Client.encode_path(id)}/clicked-links",
+          query: { "limit" => limit, "after" => after, "before" => before },
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+
+      # Every item of +clicked_links+, as an Enumerator that fetches pages as it goes. Walks in the
+      # list's own order, from +after+ (or the first page) on; pass +before+ instead to walk the
+      # other way.
+      #
+      # @return [Enumerator<Hash>]
+      def clicked_links_all(
+        id,
+        limit: nil,
+        after: nil,
+        before: nil,
+        extra_headers: nil,
+        timeout: nil
+      )
+        Pagination.each_item(after: after, before: before) do |page_after, page_before|
+          @client.request(
+            "GET",
+            "/broadcasts/#{Client.encode_path(id)}/clicked-links",
+            query: { "limit" => limit, "after" => page_after, "before" => page_before },
+            extra_headers: extra_headers,
+            timeout: timeout
+          )
+        end
       end
 
       # Send a broadcast.
@@ -461,6 +1004,11 @@ module BillionSend
       # @return [ContactsBatch]
       def batch
         @batch ||= ContactsBatch.new(@client)
+      end
+
+      # @return [ContactsImports]
+      def imports
+        @imports ||= ContactsImports.new(@client)
       end
 
       # @return [ContactsSegments]
@@ -624,7 +1172,7 @@ module BillionSend
         )
       end
 
-      # Delete in bulk.
+      # Delete contacts in bulk.
       #
       # Deletes up to 1000 contacts by id or by email address in one request and lists the rows
       # actually deleted; unknown ids or addresses are skipped. Emails stay in the log; `erase:
@@ -644,7 +1192,7 @@ module BillionSend
         )
       end
 
-      # Create in bulk.
+      # Create contacts in bulk.
       #
       # Creates up to 1000 contacts in one request. Each item is a CreateContactRequest.
       # `on_conflict` decides what happens to an email that already belongs to a contact — `error`
@@ -671,8 +1219,132 @@ module BillionSend
       end
     end
 
+    # Operations on contacts imports.
+    class ContactsImports < Base
+      # Create a contact import.
+      #
+      # Uploads a CSV (`multipart/form-data`; `column_map`, `segments` and `topics` are JSON-encoded
+      # strings) and imports it in the background: poll Retrieve a contact import for `status` and
+      # `counts`. A row with an invalid address, an address that can never receive mail, or a value
+      # that does not fit its column type fails; with the plan's contact cap reached, the rows that
+      # do not fit fail. A file that marks a row unsubscribed only opts that contact out; an import
+      # never subscribes anyone who unsubscribed. At most 5 imports can be queued or running per
+      # team.
+      #
+      # +POST /contacts/imports+
+      #
+      # @return [Hash] the parsed JSON answer
+      def create(params, extra_headers: nil, timeout: nil)
+        @client.request(
+          "POST",
+          "/contacts/imports",
+          form: params,
+          files: %w[file],
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+
+      # List contact imports.
+      #
+      # Newest first, with cursor pagination: `after` takes the last id of a page and pages toward
+      # older items, `before` takes the first id and pages back toward newer ones. Ten per page
+      # unless `limit` says otherwise; `status` filters.
+      #
+      # +GET /contacts/imports+
+      #
+      # @return [Hash] the parsed JSON answer
+      def list(limit: nil, after: nil, before: nil, status: nil, extra_headers: nil, timeout: nil)
+        @client.request(
+          "GET",
+          "/contacts/imports",
+          query: { "limit" => limit, "after" => after, "before" => before, "status" => status },
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+
+      # Every item of +list+, as an Enumerator that fetches pages as it goes. Walks in the list's
+      # own order, from +after+ (or the first page) on; pass +before+ instead to walk the other way.
+      #
+      # @return [Enumerator<Hash>]
+      def list_all(
+        limit: nil,
+        after: nil,
+        before: nil,
+        status: nil,
+        extra_headers: nil,
+        timeout: nil
+      )
+        Pagination.each_item(after: after, before: before) do |page_after, page_before|
+          @client.request(
+            "GET",
+            "/contacts/imports",
+            query: {
+              "limit" => limit,
+              "after" => page_after,
+              "before" => page_before,
+              "status" => status
+            },
+            extra_headers: extra_headers,
+            timeout: timeout
+          )
+        end
+      end
+
+      # Retrieve a contact import.
+      #
+      # +GET /contacts/imports/{id}+
+      #
+      # @return [Hash] the parsed JSON answer
+      def get(id, extra_headers: nil, timeout: nil)
+        @client.request(
+          "GET",
+          "/contacts/imports/#{Client.encode_path(id)}",
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+    end
+
     # Operations on contacts segments.
     class ContactsSegments < Base
+      # List contact segments.
+      #
+      # The segments the contact is in: an explicit member row, or a match of the segment's saved
+      # filter (the rule `GET /segments/{id}/contacts` uses). Newest first, with cursor pagination:
+      # `after` takes the last id of a page and pages toward older items, `before` takes the first
+      # id and pages back toward newer ones.
+      #
+      # +GET /contacts/{id}/segments+
+      #
+      # @return [Hash] the parsed JSON answer
+      def list(id, limit: nil, after: nil, before: nil, extra_headers: nil, timeout: nil)
+        @client.request(
+          "GET",
+          "/contacts/#{Client.encode_path(id)}/segments",
+          query: { "limit" => limit, "after" => after, "before" => before },
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+
+      # Every item of +list+, as an Enumerator that fetches pages as it goes. Walks in the list's
+      # own order, from +after+ (or the first page) on; pass +before+ instead to walk the other way.
+      #
+      # @return [Enumerator<Hash>]
+      def list_all(id, limit: nil, after: nil, before: nil, extra_headers: nil, timeout: nil)
+        Pagination.each_item(after: after, before: before) do |page_after, page_before|
+          @client.request(
+            "GET",
+            "/contacts/#{Client.encode_path(id)}/segments",
+            query: { "limit" => limit, "after" => page_after, "before" => page_before },
+            extra_headers: extra_headers,
+            timeout: timeout
+          )
+        end
+      end
+
       # Add to a segment.
       #
       # +POST /contacts/{id}/segments/{segmentId}+
@@ -738,6 +1410,9 @@ module BillionSend
     class Deliverability < Base
       # Get deliverability.
       #
+      # The account deliverability score over the last 30 days, its content and outcome parts, your
+      # hard bounce and complaint rates, and your standing. BillionSend extension.
+      #
       # +GET /deliverability+
       #
       # @return [Hash] the parsed JSON answer
@@ -753,6 +1428,16 @@ module BillionSend
 
     # Operations on domains.
     class Domains < Base
+      # @return [DomainsClaims]
+      def claims
+        @claims ||= DomainsClaims.new(@client)
+      end
+
+      # @return [DomainsUnsubscribePage]
+      def unsubscribe_page
+        @unsubscribe_page ||= DomainsUnsubscribePage.new(@client)
+      end
+
       # Create a domain.
       #
       # +POST /domains+
@@ -861,8 +1546,125 @@ module BillionSend
       end
     end
 
+    # Operations on domains claims.
+    class DomainsClaims < Base
+      # Claim a domain.
+      #
+      # Starts taking over a domain another team already holds (creating it answers 409 "domain
+      # already registered"). The response carries a TXT record to publish at the domain; then call
+      # Verify Domain Claim. Once the record is seen and the holder's safety checks pass
+      # (`blocked_reason`), the holder's domain is removed and the team gets the domain as a new one
+      # with its own DKIM key: fetch it with Retrieve Domain under the claim's `domain_id`, publish
+      # its records and verify it. Nothing of the holder's data comes with it. A live claim for the
+      # same name is returned as it stands; a claim lasts 7 days.
+      #
+      # +POST /domains/claim+
+      #
+      # @return [Hash] the parsed JSON answer
+      def create(params, extra_headers: nil, timeout: nil)
+        @client.request(
+          "POST",
+          "/domains/claim",
+          body: params,
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+
+      # Retrieve a domain claim.
+      #
+      # The claim for a placeholder domain id, as it stands. Poll it until `status` is `completed`.
+      #
+      # +GET /domains/{id}/claim+
+      #
+      # @return [Hash] the parsed JSON answer
+      def get(id, extra_headers: nil, timeout: nil)
+        @client.request(
+          "GET",
+          "/domains/#{Client.encode_path(id)}/claim",
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+
+      # Verify a domain claim.
+      #
+      # Looks for the TXT record, runs the safety checks and, when they pass, transfers the domain:
+      # the answer is the claim as it stands, `completed` when the transfer went through. A claim
+      # held back (`blocked`) is looked at again every few minutes by BillionSend; calling again
+      # checks at once.
+      #
+      # +POST /domains/{id}/claim/verify+
+      #
+      # @return [Hash] the parsed JSON answer
+      def verify(id, extra_headers: nil, timeout: nil)
+        @client.request(
+          "POST",
+          "/domains/#{Client.encode_path(id)}/claim/verify",
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+    end
+
+    # Operations on domains unsubscribe page.
+    class DomainsUnsubscribePage < Base
+      # @return [DomainsUnsubscribePageLogo]
+      def logo
+        @logo ||= DomainsUnsubscribePageLogo.new(@client)
+      end
+    end
+
+    # Operations on domains unsubscribe page logo.
+    class DomainsUnsubscribePageLogo < Base
+      # Upload a domain's unsubscribe page logo.
+      #
+      # BillionSend extension. Sets this domain's own logo on its unsubscribe pages, replacing any
+      # earlier one; send the image as `multipart/form-data` in a field named `file`. PNG, JPEG or
+      # WebP, judged from the bytes, at most 2 MiB. Afterwards `unsubscribe_page.logo_url` on
+      # Retrieve a domain returns the new address. A domain without a logo of its own shows the
+      # team's (PUT /brand/logo). On a plan without branding (Free) recipients see the built-in look
+      # until the team upgrades.
+      #
+      # +PUT /domains/{id}/unsubscribe-page/logo+
+      #
+      # @return [Hash] the parsed JSON answer
+      def upload(id, params, extra_headers: nil, timeout: nil)
+        @client.request(
+          "PUT",
+          "/domains/#{Client.encode_path(id)}/unsubscribe-page/logo",
+          form: params,
+          files: %w[file],
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+
+      # Remove a domain's unsubscribe page logo.
+      #
+      # BillionSend extension. Removes this domain's own logo; its unsubscribe pages then show the
+      # team's logo (GET /brand), or none. Removing a logo that is not there succeeds.
+      #
+      # +DELETE /domains/{id}/unsubscribe-page/logo+
+      #
+      # @return [Hash] the parsed JSON answer
+      def delete(id, extra_headers: nil, timeout: nil)
+        @client.request(
+          "DELETE",
+          "/domains/#{Client.encode_path(id)}/unsubscribe-page/logo",
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+    end
+
     # Operations on emails.
     class Emails < Base
+      # @return [EmailsAttachments]
+      def attachments
+        @attachments ||= EmailsAttachments.new(@client)
+      end
+
       # @return [EmailsMetrics]
       def metrics
         @metrics ||= EmailsMetrics.new(@client)
@@ -874,6 +1676,10 @@ module BillionSend
       end
 
       # Send an email.
+      #
+      # Queue one email for sending, now or at `scheduled_at` (up to 30 days ahead). `to`, `cc` and
+      # `bcc` together hold at most 50 recipients. Retry with the same `Idempotency-Key` and payload
+      # to get the original answer instead of a second email.
       #
       # Sent with an Idempotency-Key: +idempotency_key+ when given, else one made up for this call,
       # so that its retries never send twice.
@@ -928,6 +1734,10 @@ module BillionSend
       end
 
       # Send a batch of emails.
+      #
+      # Queue up to 100 emails in one request. With `x-batch-validation: strict` (the default) one
+      # invalid email refuses the whole batch; with `permissive` the valid ones are queued and each
+      # invalid one is reported by its index.
       #
       # Sent with an Idempotency-Key: +idempotency_key+ when given, else one made up for this call,
       # so that its retries never send twice.
@@ -1011,7 +1821,47 @@ module BillionSend
         )
       end
 
+      # Share an email.
+      #
+      # Creates a public link to view one sent email: its header lines and its body, nothing else
+      # about the team or the email (no Bcc, no files to download). The link carries a random token,
+      # expires after `expires_in` (48 hours at most, and by default) and can be revoked earlier
+      # with `DELETE /emails/{id}/share`. Needs a full access key.
+      #
+      # +POST /emails/{id}/share+
+      #
+      # @return [Hash] the parsed JSON answer
+      def share(id, params = nil, extra_headers: nil, timeout: nil)
+        @client.request(
+          "POST",
+          "/emails/#{Client.encode_path(id)}/share",
+          body: params,
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+
+      # Revoke an email's share links.
+      #
+      # Ends every live share link of one sent email at once. BillionSend extension; the links of
+      # other emails are not touched. Needs a full access key.
+      #
+      # +DELETE /emails/{id}/share+
+      #
+      # @return [Hash] the parsed JSON answer
+      def unshare(id, extra_headers: nil, timeout: nil)
+        @client.request(
+          "DELETE",
+          "/emails/#{Client.encode_path(id)}/share",
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+
       # Get email insights.
+      #
+      # The check results and score for one email. Answers 404 when the email has no insights.
+      # BillionSend extension.
       #
       # +GET /emails/{id}/insights+
       #
@@ -1026,9 +1876,68 @@ module BillionSend
       end
     end
 
+    # Operations on emails attachments.
+    class EmailsAttachments < Base
+      # List attachments.
+      #
+      # The attachments and inline parts of one sent email, each with a signed download link valid
+      # for one hour; all of them unless `limit` is given. Needs a full access key. The files come
+      # from the email's stored content, so they are gone once the content retention period removed
+      # it (the list is then empty).
+      #
+      # +GET /emails/{email_id}/attachments+
+      #
+      # @return [Hash] the parsed JSON answer
+      def list(email_id, limit: nil, after: nil, before: nil, extra_headers: nil, timeout: nil)
+        @client.request(
+          "GET",
+          "/emails/#{Client.encode_path(email_id)}/attachments",
+          query: { "limit" => limit, "after" => after, "before" => before },
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+
+      # Every item of +list+, as an Enumerator that fetches pages as it goes. Walks in the list's
+      # own order, from +after+ (or the first page) on; pass +before+ instead to walk the other way.
+      #
+      # @return [Enumerator<Hash>]
+      def list_all(email_id, limit: nil, after: nil, before: nil, extra_headers: nil, timeout: nil)
+        Pagination.each_item(after: after, before: before) do |page_after, page_before|
+          @client.request(
+            "GET",
+            "/emails/#{Client.encode_path(email_id)}/attachments",
+            query: { "limit" => limit, "after" => page_after, "before" => page_before },
+            extra_headers: extra_headers,
+            timeout: timeout
+          )
+        end
+      end
+
+      # Get an attachment.
+      #
+      # One attachment's metadata and a signed download link valid for one hour. Needs a full access
+      # key.
+      #
+      # +GET /emails/{email_id}/attachments/{id}+
+      #
+      # @return [Hash] the parsed JSON answer
+      def get(email_id, id, extra_headers: nil, timeout: nil)
+        @client.request(
+          "GET",
+          "/emails/#{Client.encode_path(email_id)}/attachments/#{Client.encode_path(id)}",
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+    end
+
     # Operations on emails metrics.
     class EmailsMetrics < Base
       # Get email metrics.
+      #
+      # Delivery statistics for a date range, by period, domain, email or broadcast: counts and
+      # rates for sent, delivered, bounced, complained, opened and clicked. Needs a full access key.
       #
       # +GET /emails/metrics+
       #
@@ -1067,6 +1976,9 @@ module BillionSend
 
       # Get clicks by link.
       #
+      # Clicks in a date range by the link that was clicked, with people and machines counted apart.
+      # Needs a full access key.
+      #
       # +GET /emails/metrics/links+
       #
       # @return [Hash] the parsed JSON answer
@@ -1096,6 +2008,9 @@ module BillionSend
 
       # Get opens and clicks by country.
       #
+      # Opens and clicks in a date range by the reader's country, with people and machines counted
+      # apart. Needs a full access key.
+      #
       # +GET /emails/metrics/countries+
       #
       # @return [Hash] the parsed JSON answer
@@ -1122,6 +2037,8 @@ module BillionSend
       end
 
       # Get opens by mail client.
+      #
+      # Opens in a date range by the mail client that fetched the images. Needs a full access key.
       #
       # +GET /emails/metrics/clients+
       #
@@ -1213,9 +2130,10 @@ module BillionSend
       # lists mail addressed to its domain only, an inbox-scoped key mail delivered into its inbox.
       # Mail held for screening or in quarantine is left out unless a full access key asks for it
       # (include_quarantined, quarantined). With wait, the request is held until matching mail
-      # arrives (long-poll). An inbox_id the key can't reach answers 404 at once, without waiting;
-      # an inbox-scoped key naming another inbox gets 403 restricted_api_key. Everything in a
-      # received email was written by whoever sent it, so its HTML is safe to show only in a
+      # arrives (long-poll). The inbox_id filter takes an inbox ID or its email address, as the
+      # /inboxes/{inbox_id} paths do. An inbox the key can't reach answers 404 at once, without
+      # waiting; an inbox-scoped key naming another inbox gets 403 restricted_api_key. Everything in
+      # a received email was written by whoever sent it, so its HTML is safe to show only in a
       # sandbox.
       #
       # +GET /emails/receiving+
@@ -1329,8 +2247,8 @@ module BillionSend
       #
       # BillionSend extension: erases one received email now, its sealed content, inbox memberships
       # and received secrets with it, and threads it leaves empty. Needs a full access key that is
-      # not scoped to an inbox; for an MCP token, the owner or admin role. Webhook payloads already
-      # sent keep their metadata until the payload retention strips them.
+      # not scoped to an inbox, from an owner, admin or developer. Webhook payloads already sent
+      # keep their metadata until the payload retention strips them.
       #
       # +DELETE /emails/receiving/{id}+
       #
@@ -1413,6 +2331,142 @@ module BillionSend
         @client.request(
           "GET",
           "/emails/receiving/#{Client.encode_path(email_id)}/attachments/#{Client.encode_path(id)}/text",
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+    end
+
+    # Operations on events.
+    class Events < Base
+      # Create an event.
+      #
+      # Defines a custom event: its name and, optionally, a payload schema (a flat map from key to
+      # string, number, boolean or date). The definition is only used to check the payload of
+      # `events.send`; automations match an event by name whether or not it is defined.
+      #
+      # +POST /events+
+      #
+      # @return [Hash] the parsed JSON answer
+      def create(params, extra_headers: nil, timeout: nil)
+        @client.request(
+          "POST",
+          "/events",
+          body: params,
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+
+      # List events.
+      #
+      # The team's event definitions. Newest first, with cursor pagination: `after` takes the last
+      # id of a page and pages toward older items, `before` takes the first id and pages back toward
+      # newer ones.
+      #
+      # +GET /events+
+      #
+      # @return [Hash] the parsed JSON answer
+      def list(limit: nil, after: nil, before: nil, extra_headers: nil, timeout: nil)
+        @client.request(
+          "GET",
+          "/events",
+          query: { "limit" => limit, "after" => after, "before" => before },
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+
+      # Every item of +list+, as an Enumerator that fetches pages as it goes. Walks in the list's
+      # own order, from +after+ (or the first page) on; pass +before+ instead to walk the other way.
+      #
+      # @return [Enumerator<Hash>]
+      def list_all(limit: nil, after: nil, before: nil, extra_headers: nil, timeout: nil)
+        Pagination.each_item(after: after, before: before) do |page_after, page_before|
+          @client.request(
+            "GET",
+            "/events",
+            query: { "limit" => limit, "after" => page_after, "before" => page_before },
+            extra_headers: extra_headers,
+            timeout: timeout
+          )
+        end
+      end
+
+      # Send an event.
+      #
+      # Records an event for a contact, given by `contact_id` or by `email` (exactly one). Every
+      # enabled automation whose trigger is this event name starts a run for the contact, and runs
+      # waiting for this event continue. The event is accepted whether or not it is defined or any
+      # automation matches; when it is defined with a schema, the payload is checked against it and
+      # each typed value is converted. A contact that does not exist yet is created when an
+      # automation needs it. Retry with the same `Idempotency-Key` and the same body to get the
+      # original answer instead of a second event.
+      #
+      # Sent with an Idempotency-Key: +idempotency_key+ when given, else one made up for this call,
+      # so that its retries never send twice.
+      #
+      # +POST /events/send+
+      #
+      # @return [Hash] the parsed JSON answer
+      def send(params, idempotency_key: nil, extra_headers: nil, timeout: nil)
+        @client.request(
+          "POST",
+          "/events/send",
+          body: params,
+          idempotency_key: idempotency_key,
+          auto_idempotency_key: true,
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+
+      # Retrieve an event.
+      #
+      # By id or by name. A name with `/`, `%` or spaces goes through the path URL-encoded.
+      #
+      # +GET /events/{id_or_name}+
+      #
+      # @return [Hash] the parsed JSON answer
+      def get(id_or_name, extra_headers: nil, timeout: nil)
+        @client.request(
+          "GET",
+          "/events/#{Client.encode_path(id_or_name)}",
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+
+      # Update an event.
+      #
+      # Replaces the payload schema; `null` clears it. The name cannot change. Runs already started
+      # are not affected: the schema is read only when an event is sent.
+      #
+      # +PATCH /events/{id_or_name}+
+      #
+      # @return [Hash] the parsed JSON answer
+      def update(id_or_name, params, extra_headers: nil, timeout: nil)
+        @client.request(
+          "PATCH",
+          "/events/#{Client.encode_path(id_or_name)}",
+          body: params,
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+
+      # Delete an event.
+      #
+      # Removes the definition, and with it the payload check. Automations match by name, so they
+      # are not affected, and the name can still be sent.
+      #
+      # +DELETE /events/{id_or_name}+
+      #
+      # @return [Hash] the parsed JSON answer
+      def remove(id_or_name, extra_headers: nil, timeout: nil)
+        @client.request(
+          "DELETE",
+          "/events/#{Client.encode_path(id_or_name)}",
           extra_headers: extra_headers,
           timeout: timeout
         )
@@ -1607,7 +2661,10 @@ module BillionSend
     class InboxesAgent < Base
       # Get agent settings.
       #
-      # Hosted-agent settings. BillionSend runs no agent of its own, so an inbox never has one.
+      # The instructions, tone and allowed actions saved for this inbox's agent; empty until a first
+      # update. BillionSend stores these settings and runs no agent of its own: your own agent reads
+      # them (an inbox-scoped key can read its inbox's) and acts on the inbox through the API or
+      # MCP.
       #
       # +GET /inboxes/{inbox_id}/agent+
       #
@@ -1616,6 +2673,27 @@ module BillionSend
         @client.request(
           "GET",
           "/inboxes/#{Client.encode_path(inbox_id)}/agent",
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+
+      # Update agent settings.
+      #
+      # Saves the instructions, tone and allowed actions of this inbox's agent. Send at least one
+      # field; a field left out keeps its value, `null` clears instructions or tone, and `actions`
+      # replaces the list. BillionSend stores these settings and runs no agent of its own: your own
+      # agent reads them (an inbox-scoped key can read its inbox's) and acts on the inbox through
+      # the API or MCP. Needs a developer role; an inbox-scoped key cannot change them.
+      #
+      # +PATCH /inboxes/{inbox_id}/agent+
+      #
+      # @return [Hash] the parsed JSON answer
+      def update(inbox_id, params, extra_headers: nil, timeout: nil)
+        @client.request(
+          "PATCH",
+          "/inboxes/#{Client.encode_path(inbox_id)}/agent",
+          body: params,
           extra_headers: extra_headers,
           timeout: timeout
         )
@@ -1776,7 +2854,7 @@ module BillionSend
       # Send a draft.
       #
       # Sends the draft from the inbox address; the body is optional and only ever holds `headers`,
-      # which are not supported yet (an empty value is fine), and an `Idempotency-Key` is accepted.
+      # which are not supported (an empty value is fine), and an `Idempotency-Key` is accepted.
       # Answers the sent email's id. A draft waiting for approval goes out only when a person or a
       # team-wide full access key sends it (403 approval_required otherwise), and their send skips
       # the inbox's rules but never the team's limits or the shared domain's rules. An agent's send
@@ -1864,8 +2942,8 @@ module BillionSend
       # Stream one inbox's events.
       #
       # BillionSend extension: the event stream of one inbox, as GET /inboxes/events, ending when
-      # the inbox is deleted or expires. An inbox-scoped key may stream its own inbox, without the
-      # events about held mail.
+      # the inbox is deleted or expires; it carries inbox.deleted and inbox.expired whatever types
+      # names. An inbox-scoped key may stream its own inbox, without the events about held mail.
       #
       # +GET /inboxes/{inbox_id}/events+
       #
@@ -2528,6 +3606,121 @@ module BillionSend
       end
     end
 
+    # Operations on logs.
+    class Logs < Base
+      # List request logs.
+      #
+      # Newest first, with cursor pagination: `after` takes the last id of a page and pages toward
+      # older items, `before` takes the first id and pages back toward newer ones. Every
+      # authenticated request the team's keys and connected apps made, this one included; the bodies
+      # come with Retrieve a log.
+      #
+      # +GET /logs+
+      #
+      # @return [Hash] the parsed JSON answer
+      def list(limit: nil, after: nil, before: nil, extra_headers: nil, timeout: nil)
+        @client.request(
+          "GET",
+          "/logs",
+          query: { "limit" => limit, "after" => after, "before" => before },
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+
+      # Every item of +list+, as an Enumerator that fetches pages as it goes. Walks in the list's
+      # own order, from +after+ (or the first page) on; pass +before+ instead to walk the other way.
+      #
+      # @return [Enumerator<Hash>]
+      def list_all(limit: nil, after: nil, before: nil, extra_headers: nil, timeout: nil)
+        Pagination.each_item(after: after, before: before) do |page_after, page_before|
+          @client.request(
+            "GET",
+            "/logs",
+            query: { "limit" => limit, "after" => page_after, "before" => page_before },
+            extra_headers: extra_headers,
+            timeout: timeout
+          )
+        end
+      end
+
+      # Retrieve a log.
+      #
+      # One logged request with its JSON request and response bodies. Bodies were redacted when
+      # stored: html, text and attachment data are size markers, tokens and secrets are
+      # `[redacted]`. A caller acting as a person whose role lacks developer access gets null
+      # bodies; an API key always gets them.
+      #
+      # +GET /logs/{id}+
+      #
+      # @return [Hash] the parsed JSON answer
+      def get(id, extra_headers: nil, timeout: nil)
+        @client.request(
+          "GET",
+          "/logs/#{Client.encode_path(id)}",
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+    end
+
+    # Operations on oauth grants.
+    class OauthGrants < Base
+      # List OAuth grants.
+      #
+      # Newest first, with cursor pagination: `after` takes the last id of a page and pages toward
+      # older items, `before` takes the first id and pages back toward newer ones. The apps
+      # connected to the team, MCP clients among them, that hold a grant in force.
+      #
+      # +GET /oauth/grants+
+      #
+      # @return [Hash] the parsed JSON answer
+      def list(limit: nil, after: nil, before: nil, extra_headers: nil, timeout: nil)
+        @client.request(
+          "GET",
+          "/oauth/grants",
+          query: { "limit" => limit, "after" => after, "before" => before },
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+
+      # Every item of +list+, as an Enumerator that fetches pages as it goes. Walks in the list's
+      # own order, from +after+ (or the first page) on; pass +before+ instead to walk the other way.
+      #
+      # @return [Enumerator<Hash>]
+      def list_all(limit: nil, after: nil, before: nil, extra_headers: nil, timeout: nil)
+        Pagination.each_item(after: after, before: before) do |page_after, page_before|
+          @client.request(
+            "GET",
+            "/oauth/grants",
+            query: { "limit" => limit, "after" => page_after, "before" => page_before },
+            extra_headers: extra_headers,
+            timeout: timeout
+          )
+        end
+      end
+
+      # Revoke an OAuth grant.
+      #
+      # Ends the grant with every token issued under it: access tokens stop working at once and the
+      # app has to ask for consent again. The grant's holder may revoke it; otherwise the caller
+      # needs owner or admin access, and an all-teams grant needs admin access to every team its
+      # holder belongs to. The grant is deleted, so it is not listed afterwards.
+      #
+      # +DELETE /oauth/grants/{id}+
+      #
+      # @return [Hash] the parsed JSON answer
+      def revoke(id, extra_headers: nil, timeout: nil)
+        @client.request(
+          "DELETE",
+          "/oauth/grants/#{Client.encode_path(id)}",
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+    end
+
     # Operations on segments.
     class Segments < Base
       # @return [SegmentsContacts]
@@ -2716,11 +3909,25 @@ module BillionSend
       # +GET /suppressions+
       #
       # @return [Hash] the parsed JSON answer
-      def list(limit: nil, after: nil, before: nil, origin: nil, extra_headers: nil, timeout: nil)
+      def list(
+        limit: nil,
+        after: nil,
+        before: nil,
+        origin: nil,
+        kind: nil,
+        extra_headers: nil,
+        timeout: nil
+      )
         @client.request(
           "GET",
           "/suppressions",
-          query: { "limit" => limit, "after" => after, "before" => before, "origin" => origin },
+          query: {
+            "limit" => limit,
+            "after" => after,
+            "before" => before,
+            "origin" => origin,
+            "kind" => kind
+          },
           extra_headers: extra_headers,
           timeout: timeout
         )
@@ -2735,6 +3942,7 @@ module BillionSend
         after: nil,
         before: nil,
         origin: nil,
+        kind: nil,
         extra_headers: nil,
         timeout: nil
       )
@@ -2746,7 +3954,8 @@ module BillionSend
               "limit" => limit,
               "after" => page_after,
               "before" => page_before,
-              "origin" => origin
+              "origin" => origin,
+              "kind" => kind
             },
             extra_headers: extra_headers,
             timeout: timeout
@@ -2785,7 +3994,7 @@ module BillionSend
 
     # Operations on suppressions batch.
     class SuppressionsBatch < Base
-      # Add in bulk.
+      # Add suppressions in bulk.
       #
       # +POST /suppressions/batch/add+
       #
@@ -2800,7 +4009,7 @@ module BillionSend
         )
       end
 
-      # Remove in bulk.
+      # Remove suppressions in bulk.
       #
       # +POST /suppressions/batch/remove+
       #
@@ -3088,25 +4297,16 @@ module BillionSend
           timeout: timeout
         )
       end
-
-      # Delete an unsubscribe.
-      #
-      # +DELETE /unsubscribes/{id}+
-      #
-      # @return [Hash] the parsed JSON answer
-      def delete(id, extra_headers: nil, timeout: nil)
-        @client.request(
-          "DELETE",
-          "/unsubscribes/#{Client.encode_path(id)}",
-          extra_headers: extra_headers,
-          timeout: timeout
-        )
-      end
     end
 
     # Operations on usage.
     class Usage < Base
       # Get usage.
+      #
+      # What the team uses against what its plan allows: emails (the UTC day and the billing
+      # period), contacts, segments, broadcasts, domains and the API rate limit. BillionSend adds
+      # `plan`, `inboxes`, `webhook_endpoints`, `verification` and the period's overage fields. A
+      # limit nothing caps is null.
       #
       # +GET /usage+
       #
@@ -3226,6 +4426,11 @@ module BillionSend
 
     # Operations on webhooks.
     class Webhooks < Base
+      # @return [WebhooksEvents]
+      def events
+        @events ||= WebhooksEvents.new(@client)
+      end
+
       # Create a webhook.
       #
       # +POST /webhooks+
@@ -3326,17 +4531,139 @@ module BillionSend
       # switch at any point without a gap. A second rotation inside the window replaces the previous
       # secret.
       #
-      # +POST /webhooks/{id}/rotate+
+      # +POST /webhooks/{id}/signing-secret/rotate+
       #
       # @return [Hash] the parsed JSON answer
-      def rotate(id, params = nil, extra_headers: nil, timeout: nil)
+      def rotate_signing_secret(id, params = nil, extra_headers: nil, timeout: nil)
         @client.request(
           "POST",
-          "/webhooks/#{Client.encode_path(id)}/rotate",
+          "/webhooks/#{Client.encode_path(id)}/signing-secret/rotate",
           body: params,
           extra_headers: extra_headers,
           timeout: timeout
         )
+      end
+    end
+
+    # Operations on webhooks events.
+    class WebhooksEvents < Base
+      # @return [WebhooksEventsAttempts]
+      def attempts
+        @attempts ||= WebhooksEventsAttempts.new(@client)
+      end
+
+      # List a webhook's events.
+      #
+      # Every event the webhook was sent or is waiting to be sent, newest first. Newest first, with
+      # cursor pagination: `after` takes the last id of a page and pages toward older items,
+      # `before` takes the first id and pages back toward newer ones.
+      #
+      # +GET /webhooks/{id}/events+
+      #
+      # @return [Hash] the parsed JSON answer
+      def list(id, limit: nil, after: nil, before: nil, extra_headers: nil, timeout: nil)
+        @client.request(
+          "GET",
+          "/webhooks/#{Client.encode_path(id)}/events",
+          query: { "limit" => limit, "after" => after, "before" => before },
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+
+      # Every item of +list+, as an Enumerator that fetches pages as it goes. Walks in the list's
+      # own order, from +after+ (or the first page) on; pass +before+ instead to walk the other way.
+      #
+      # @return [Enumerator<Hash>]
+      def list_all(id, limit: nil, after: nil, before: nil, extra_headers: nil, timeout: nil)
+        Pagination.each_item(after: after, before: before) do |page_after, page_before|
+          @client.request(
+            "GET",
+            "/webhooks/#{Client.encode_path(id)}/events",
+            query: { "limit" => limit, "after" => page_after, "before" => page_before },
+            extra_headers: extra_headers,
+            timeout: timeout
+          )
+        end
+      end
+
+      # Retrieve a webhook event.
+      #
+      # +GET /webhooks/{id}/events/{event_id}+
+      #
+      # @return [Hash] the parsed JSON answer
+      def get(id, event_id, extra_headers: nil, timeout: nil)
+        @client.request(
+          "GET",
+          "/webhooks/#{Client.encode_path(id)}/events/#{Client.encode_path(event_id)}",
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+
+      # Replay a webhook event.
+      #
+      # Posts the event again: a new event with the same payload and the same webhook-id, queued
+      # like any other (signed, paced and retried the usual way). Returns the new event. Refused
+      # with 422 for a webhook that is disabled and for an event whose payload the retention window
+      # has emptied.
+      #
+      # +POST /webhooks/{id}/events/{event_id}/replay+
+      #
+      # @return [Hash] the parsed JSON answer
+      def replay(id, event_id, extra_headers: nil, timeout: nil)
+        @client.request(
+          "POST",
+          "/webhooks/#{Client.encode_path(id)}/events/#{Client.encode_path(event_id)}/replay",
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+    end
+
+    # Operations on webhooks events attempts.
+    class WebhooksEventsAttempts < Base
+      # List an event's delivery attempts.
+      #
+      # Every post made for the event, newest first. Newest first, with cursor pagination: `after`
+      # takes the last id of a page and pages toward older items, `before` takes the first id and
+      # pages back toward newer ones.
+      #
+      # +GET /webhooks/{id}/events/{event_id}/attempts+
+      #
+      # @return [Hash] the parsed JSON answer
+      def list(id, event_id, limit: nil, after: nil, before: nil, extra_headers: nil, timeout: nil)
+        @client.request(
+          "GET",
+          "/webhooks/#{Client.encode_path(id)}/events/#{Client.encode_path(event_id)}/attempts",
+          query: { "limit" => limit, "after" => after, "before" => before },
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+
+      # Every item of +list+, as an Enumerator that fetches pages as it goes. Walks in the list's
+      # own order, from +after+ (or the first page) on; pass +before+ instead to walk the other way.
+      #
+      # @return [Enumerator<Hash>]
+      def list_all(
+        id,
+        event_id,
+        limit: nil,
+        after: nil,
+        before: nil,
+        extra_headers: nil,
+        timeout: nil
+      )
+        Pagination.each_item(after: after, before: before) do |page_after, page_before|
+          @client.request(
+            "GET",
+            "/webhooks/#{Client.encode_path(id)}/events/#{Client.encode_path(event_id)}/attempts",
+            query: { "limit" => limit, "after" => page_after, "before" => page_before },
+            extra_headers: extra_headers,
+            timeout: timeout
+          )
+        end
       end
     end
 
@@ -3355,6 +4682,16 @@ module BillionSend
       # @return [Resources::Audiences]
       def audiences
         @audiences ||= Audiences.new(self)
+      end
+
+      # @return [Resources::Automations]
+      def automations
+        @automations ||= Automations.new(self)
+      end
+
+      # @return [Resources::Brand]
+      def brand
+        @brand ||= Brand.new(self)
       end
 
       # @return [Resources::Broadcasts]
@@ -3387,9 +4724,24 @@ module BillionSend
         @emails ||= Emails.new(self)
       end
 
+      # @return [Resources::Events]
+      def events
+        @events ||= Events.new(self)
+      end
+
       # @return [Resources::Inboxes]
       def inboxes
         @inboxes ||= Inboxes.new(self)
+      end
+
+      # @return [Resources::Logs]
+      def logs
+        @logs ||= Logs.new(self)
+      end
+
+      # @return [Resources::OauthGrants]
+      def oauth_grants
+        @oauth_grants ||= OauthGrants.new(self)
       end
 
       # @return [Resources::Segments]

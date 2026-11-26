@@ -91,6 +91,55 @@ class ClientTest < Minitest::Test
     assert_equal "order-1", mock.calls.last.header("idempotency-key")
   end
 
+  def test_the_key_is_trimmed_and_a_blank_one_counts_as_none
+    assert_equal "bs_x", BillionSend::Client.new(api_key: " bs_x\n").api_key
+    with_env("BILLIONSEND_API_KEY" => "bs_env\n") do
+      assert_equal "bs_env", BillionSend::Client.new(api_key: "  ").api_key
+    end
+    with_env("BILLIONSEND_API_KEY" => " \n") do
+      assert_nil BillionSend::Client.new.api_key
+    end
+  end
+
+  def test_a_key_with_a_control_character_is_refused_without_showing_it
+    error = assert_raises(ArgumentError) { BillionSend::Client.new(api_key: "bs_a\nb") }
+    refute_includes error.message, "bs_a"
+  end
+
+  def test_a_header_http_cannot_carry_fails_before_sending
+    message = { from: "a@acme.com", to: ["b@example.com"], subject: "s", text: "t" }
+    ["welcome/订单-1", "a\r\nX-Evil: 1", "\xff"].each do |key|
+      error = assert_raises(BillionSend::Error) { client.emails.send(message, idempotency_key: key) }
+      assert_equal "invalid_header", error.name
+      assert_match(/Idempotency-Key/, error.message)
+      refute_includes error.message.b, "welcome"
+    end
+    assert_raises(BillionSend::Error) { client(default_headers: { "x-tag" => "é" }).domains.list }
+    assert_empty mock.calls
+    assert_empty sleeps
+  end
+
+  def test_an_empty_or_dot_path_parameter_is_refused_before_sending
+    [nil, "", ".", ".."].each do |id|
+      assert_raises(ArgumentError) { client.emails.get(id) }
+      assert_raises(ArgumentError) { client.webhooks.events.get(ID, id) }
+    end
+    assert_empty mock.calls
+    assert_equal "...", BillionSend::Client.encode_path("...")
+  end
+
+  def test_an_empty_list_is_left_out_of_the_query
+    client.emails.metrics.call(metrics: ["sent"], domain_id: [])
+    assert_equal({ "metrics" => ["sent"] }, mock.calls.last.query)
+  end
+
+  def test_a_success_without_a_body_is_nil
+    ["", " \n"].each do |body|
+      mock.respond("DELETE", "/domains/{id}", 200, body: body)
+      assert_nil client.domains.delete(ID)
+    end
+  end
+
   def test_a_non_json_success_raises
     mock.respond("GET", "/domains", body: "<html>", headers: { "content-type" => "text/html" })
     error = assert_raises(BillionSend::Error) { client.domains.list }

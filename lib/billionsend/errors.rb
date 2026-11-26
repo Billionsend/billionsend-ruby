@@ -84,8 +84,17 @@ module BillionSend
     end
   end
 
-  # 5xx: the API failed to answer the request.
-  class APIError < Error; end
+  # 5xx: the API failed to answer the request; +retry_after+ holds the server's
+  # hint in seconds, when it sent one.
+  class APIError < Error
+    # @return [Float, nil]
+    attr_reader :retry_after
+
+    def initialize(message, name: "application_error", status_code: nil, response: nil, retry_after: nil)
+      super(message, name: name, status_code: status_code, response: response)
+      @retry_after = retry_after
+    end
+  end
 
   # A webhook delivery whose signature, timestamp or headers do not check out.
   class WebhookVerificationError < Error

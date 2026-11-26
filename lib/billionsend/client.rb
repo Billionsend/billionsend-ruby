@@ -27,23 +27,27 @@ module BillionSend
     # A retry of a keyed request can meet the first attempt still running on the server.
     CONCURRENT_IDEMPOTENT = "concurrent_idempotent_requests"
     IDEMPOTENT_METHODS = %w[GET HEAD OPTIONS PUT DELETE].freeze
+    # A header name or value holds printable ASCII and tabs, nothing else.
+    UNSENDABLE_HEADER = /[^\t\x20-\x7e]/n
 
     attr_reader :api_key, :base_url, :timeout, :max_retries
 
     # Waits between retries; replace it in tests.
     attr_writer :sleeper
 
-    # @param api_key [String, nil] defaults to BILLIONSEND_API_KEY
+    # @param api_key [String, nil] defaults to BILLIONSEND_API_KEY; surrounding whitespace is
+    #   dropped, and a blank key counts as none
     # @param base_url [String, nil] defaults to BILLIONSEND_BASE_URL, else https://api.billionsend.com
     # @param timeout [Numeric] seconds per request (an event stream waits at least 60 s per read)
     # @param max_retries [Integer] retries after the first attempt (see "Retries" in the README)
     # @param default_headers [Hash{String => String}] sent with every request
     # @param transport [#call, #open_stream] the HTTP layer (NetHTTPTransport by default)
+    # @raise [ArgumentError] the API key holds a control character, or max_retries is negative
     def initialize(api_key: nil, base_url: nil, timeout: DEFAULT_TIMEOUT, max_retries: DEFAULT_MAX_RETRIES,
                    default_headers: {}, transport: nil)
       raise ArgumentError, "max_retries must be 0 or more" if max_retries.negative?
 
-      @api_key = api_key || ENV.fetch("BILLIONSEND_API_KEY", nil)
+      @api_key = clean_key(api_key) || clean_key(ENV.fetch("BILLIONSEND_API_KEY", nil))
       resolved = base_url || ENV.fetch("BILLIONSEND_BASE_URL", nil)
       resolved = DEFAULT_BASE_URL if resolved.nil? || resolved.empty?
       @base_url = resolved.sub(%r{/+\z}, "")
@@ -60,16 +64,23 @@ module BillionSend
 
     # Sends one request with retries and returns the parsed JSON answer.
     # The generated resource methods call it; use it for anything they do not cover.
-    def request(method, path, query: nil, headers: nil, body: nil, idempotency_key: nil,
+    #
+    # +body+ is sent as JSON. +form+ is sent as multipart/form-data instead (see
+    # {Multipart}): the fields named in +files+ and values that answer +read+ are
+    # files. An upload is not repeated after a 5xx or a lost answer unless it
+    # carries an idempotency key.
+    def request(method, path, query: nil, headers: nil, body: nil, form: nil, files: [], idempotency_key: nil,
                 auto_idempotency_key: false, auth: true, extra_headers: nil, timeout: nil)
-      all_headers = build_headers(auth: auth, body: !body.nil?, idempotency_key: idempotency_key,
+      content_type = body.nil? ? nil : "application/json"
+      payload = body.nil? ? nil : JSON.generate(body)
+      content_type, payload = Multipart.encode(form, files: files) unless form.nil?
+      all_headers = build_headers(auth: auth, content_type: content_type, idempotency_key: idempotency_key,
                                   headers: headers, extra_headers: extra_headers)
       keyed = all_headers.keys.any? { |k| k.casecmp?("idempotency-key") }
       if auto_idempotency_key && !keyed
         all_headers["Idempotency-Key"] = SecureRandom.uuid
         keyed = true
       end
-      payload = body.nil? ? nil : JSON.generate(body)
       req = Request.new(method: method, url: url(path, query), headers: all_headers, body: payload,
                         timeout: timeout || @timeout)
       attempt = 0
@@ -82,7 +93,7 @@ module BillionSend
         rescue APIConnectionError => e
           error = e
         end
-        delay = retry_delay(attempt, error, method: method, keyed: keyed)
+        delay = retry_delay(attempt, error, method: method, keyed: keyed, upload: !form.nil?)
         raise error if delay.nil?
 
         @sleeper.call(delay)
@@ -101,7 +112,7 @@ module BillionSend
 
     # @api private
     def open_stream(path, query:, last_event_id:, extra_headers:, timeout:)
-      headers = build_headers(auth: true, body: false, accept: "text/event-stream",
+      headers = build_headers(auth: true, accept: "text/event-stream",
                               headers: { "Last-Event-ID" => last_event_id }, extra_headers: extra_headers)
       req = Request.new(method: "GET", url: url(path, query), headers: headers, body: nil,
                         timeout: timeout || @timeout)
@@ -122,14 +133,25 @@ module BillionSend
     end
 
     # Encodes one path segment (an id, or an inbox address such as support@example.com).
+    #
+    # An empty value is refused: +/emails/+ is another route, so a missing id
+    # would run something else. So are "." and "..", which a URL folds away.
+    #
+    # @raise [ArgumentError] the value is nil, empty, "." or ".."
     def self.encode_path(value)
-      value.to_s.b.gsub(/[^A-Za-z0-9\-._~@]/) { |c| format("%%%02X", c.ord) }
+      text = value.to_s
+      raise ArgumentError, "A path parameter cannot be empty" if text.empty?
+      raise ArgumentError, "A path parameter cannot be #{text.inspect}" if [".", ".."].include?(text)
+
+      text.b.gsub(/[^A-Za-z0-9\-._~@]/) { |c| format("%%%02X", c.ord) }
     end
 
-    # Drops unset values, writes booleans as true/false and lists comma-separated in one key.
+    # Drops unset values and empty lists, writes booleans as true/false and lists
+    # comma-separated in one key.
     def self.encode_query(query)
       pairs = (query || {}).filter_map do |key, value|
-        next if value.nil?
+        # An empty list is no filter: "key=" would be refused as a value.
+        next if value.nil? || (value.is_a?(Array) && value.empty?)
 
         value = value.map { |item| query_text(item) }.join(",") if value.is_a?(Array)
         [key.to_s, query_text(value)]
@@ -173,37 +195,57 @@ module BillionSend
         message = text[0, 500] unless text.empty?
       end
       klass = BillionSend.error_class(status)
-      if klass == RateLimitError
-        return RateLimitError.new(message, name: name, status_code: status, response: response,
-                                           retry_after: retry_after(response))
+      if [RateLimitError, APIError].include?(klass)
+        return klass.new(message, name: name, status_code: status, response: response,
+                                  retry_after: retry_after(response))
       end
       klass.new(message, name: name, status_code: status, response: response)
     end
 
     private
 
+    # The key as it goes into the header: one read from a file ends in a newline.
+    def clean_key(key)
+      key = key.to_s.scrub.strip
+      raise ArgumentError, "The API key must not contain control characters" if key.match?(/[[:cntrl:]]/)
+
+      key.empty? ? nil : key
+    end
+
     def url(path, query)
       encoded = Client.encode_query(query)
       encoded.empty? ? @base_url + path : "#{@base_url}#{path}?#{encoded}"
     end
 
-    def build_headers(auth:, body:, accept: "application/json", idempotency_key: nil, headers: nil,
+    def build_headers(auth:, content_type: nil, accept: "application/json", idempotency_key: nil, headers: nil,
                       extra_headers: nil)
       out = { "Accept" => accept, "User-Agent" => "billionsend-ruby/#{VERSION}" }
       if auth
-        if @api_key.nil? || @api_key.empty?
+        if @api_key.nil?
           raise AuthenticationError.new("No API key: pass api_key: or set BILLIONSEND_API_KEY",
                                         name: "missing_api_key")
         end
 
         out["Authorization"] = "Bearer #{@api_key}"
       end
-      out["Content-Type"] = "application/json" if body
-      out["Idempotency-Key"] = idempotency_key unless idempotency_key.nil?
+      out["Content-Type"] = content_type unless content_type.nil?
+      out["Idempotency-Key"] = idempotency_key.to_s unless idempotency_key.nil?
       merge!(out, @default_headers)
       merge!(out, (headers || {}).compact)
       merge!(out, extra_headers || {})
+      check_headers(out)
       out
+    end
+
+    # Refuses, before anything is sent, a header HTTP cannot carry. Only its name
+    # goes into the message: the value may be a key.
+    def check_headers(headers)
+      headers.each do |name, value|
+        next unless name.b.match?(UNSENDABLE_HEADER) || value.b.match?(UNSENDABLE_HEADER)
+
+        raise Error.new("The #{name.inspect} header must be ASCII text without control characters",
+                        name: "invalid_header")
+      end
     end
 
     # Sets headers, replacing any already there under another spelling of the name.
@@ -215,7 +257,8 @@ module BillionSend
     end
 
     def parse_json(response)
-      return nil if response.body.nil? || response.body.empty?
+      # A success without a body (a 204, an empty 200) is a call that worked.
+      return nil if response.body.nil? || response.body.b.strip.empty?
 
       JSON.parse(response.body)
     rescue JSON::ParserError
@@ -226,20 +269,25 @@ module BillionSend
 
     # Seconds to wait before retrying after +error+, or nil to raise it.
     #
-    # Retried: requests that are safe to repeat (GET, PUT, DELETE, or any
-    # request with an idempotency key) failing with 429, 5xx or no answer at
-    # all, and a keyed request whose first attempt is still running (409
-    # concurrent_idempotent_requests).
-    def retry_delay(attempt, error, method:, keyed:)
+    # Retried: a 429 for any request (the API answers it before it writes
+    # anything); and, for requests safe to repeat (GET, PUT, DELETE, or any
+    # request with an idempotency key), a 5xx or no answer at all, and for a
+    # keyed request whose first attempt is still running a 409
+    # concurrent_idempotent_requests. An upload without a key is not safe to
+    # repeat whatever its method.
+    def retry_delay(attempt, error, method:, keyed:, upload:)
       return nil if attempt >= @max_retries
-      return nil unless IDEMPOTENT_METHODS.include?(method) || keyed
 
       status = error.status_code
-      unless error.is_a?(APIConnectionError)
-        if status == 409
-          return nil unless keyed && error.name == CONCURRENT_IDEMPOTENT
-        elsif status.nil? || (status != 429 && status < 500)
-          return nil
+      unless status == 429
+        return nil unless keyed || (!upload && IDEMPOTENT_METHODS.include?(method))
+
+        unless error.is_a?(APIConnectionError)
+          if status == 409
+            return nil unless keyed && error.name == CONCURRENT_IDEMPOTENT
+          elsif status.nil? || status < 500
+            return nil
+          end
         end
       end
       if error.response

@@ -3,6 +3,7 @@
 require_relative "billionsend/version"
 require_relative "billionsend/errors"
 require_relative "billionsend/transport"
+require_relative "billionsend/multipart"
 require_relative "billionsend/pagination"
 require_relative "billionsend/webhooks"
 require_relative "billionsend/streaming"

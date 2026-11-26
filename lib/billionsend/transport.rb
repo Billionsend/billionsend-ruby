@@ -3,6 +3,7 @@
 require "net/http"
 require "openssl"
 require "uri"
+require "zlib"
 
 module BillionSend
   # One HTTP request, as the client hands it to a transport.
@@ -65,7 +66,7 @@ module BillionSend
     rescue Net::OpenTimeout, Net::ReadTimeout, Net::WriteTimeout => e
       raise APITimeoutError, "Request timed out: #{e.message}"
     rescue SocketError, SystemCallError, IOError, OpenSSL::SSL::SSLError, EOFError,
-           Net::HTTPBadResponse, Net::ProtocolError => e
+           Net::HTTPBadResponse, Net::ProtocolError, Zlib::Error => e
       raise APIConnectionError, "Connection error: #{e.message}"
     end
 

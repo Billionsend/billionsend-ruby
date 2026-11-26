@@ -37,6 +37,31 @@ class RetriesTest < Minitest::Test
     assert_equal 1, mock.calls.size
   end
 
+  def test_a_429_is_retried_for_every_method
+    [["POST", "/domains", ->(c) { c.domains.create({ "name" => "acme.com" }) }],
+     ["PATCH", "/domains/{id}", ->(c) { c.domains.update(ID, {}) }]].each do |method, path, call|
+      before = mock.calls.size
+      mock.error(method, path, 429, "rate_limit_exceeded", "Slow down", headers: { "retry-after" => "2" })
+      call.call(client)
+      assert_equal before + 2, mock.calls.size
+    end
+    assert_equal [2.0, 2.0], sleeps
+  end
+
+  def test_a_429_without_a_retry_after_backs_off
+    mock.error("POST", "/domains", 429, "rate_limit_exceeded", "Slow down")
+    client.domains.create({ "name" => "acme.com" })
+    assert_operator sleeps.fetch(0), :<=, 0.5
+  end
+
+  def test_a_patch_is_not_retried_on_5xx_or_a_lost_answer
+    mock.error("PATCH", "/domains/{id}", 503, "unavailable", "Try later")
+    assert_raises(BillionSend::APIError) { client.domains.update(ID, {}) }
+    mock.fail("PATCH", "/domains/{id}", BillionSend::APIConnectionError.new)
+    assert_raises(BillionSend::APIConnectionError) { client.domains.update(ID, {}) }
+    assert_equal 2, mock.calls.size
+  end
+
   def test_a_send_is_retried_with_the_same_generated_key
     mock.error("POST", "/emails", 503, "unavailable", "Try later")
     mock.fail("POST", "/emails", BillionSend::APIConnectionError.new)

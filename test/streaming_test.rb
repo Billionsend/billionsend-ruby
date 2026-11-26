@@ -26,6 +26,16 @@ class SSEDecoderTest < Minitest::Test
   end
 end
 
+class SSEPositionTest < Minitest::Test
+  def test_an_id_counts_once_its_block_is_complete
+    decoder = BillionSend::SSEDecoder.new
+    decoder.feed("id: 1\ndata: {}\n\nid: 2\ndata: {")
+    assert_equal "1", decoder.last_event_id
+    decoder.feed("}\n\n")
+    assert_equal "2", decoder.last_event_id
+  end
+end
+
 class EventStreamTest < Minitest::Test
   include ClientHelpers
 
@@ -57,6 +67,16 @@ class EventStreamTest < Minitest::Test
     assert_equal [1.0, 0.25], sleeps
     assert_equal "4", stream.last_event_id
     assert(mock.streams.all?(&:closed))
+  end
+
+  def test_an_id_without_data_moves_the_position_even_when_the_connection_drops
+    stream_answer(TEAM, ["id: 7\n\n"], error: BillionSend::APIConnectionError.new)
+    stream_answer(TEAM, [frame("8", "inbox.email.received"), "id: 9\ndata: {"],
+                  error: BillionSend::APIConnectionError.new)
+    stream_answer(TEAM, [frame("10", "inbox.email.received")])
+    stream = client.inboxes.events.stream
+    assert_equal %w[8 10], stream.first(2).map(&:id)
+    assert_equal [nil, "7", "8"], mock.calls.map { |c| c.header("last-event-id") }
   end
 
   def test_a_gap_is_handed_out_once_per_position

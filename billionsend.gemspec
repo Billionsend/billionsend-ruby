@@ -7,8 +7,9 @@ Gem::Specification.new do |spec|
   spec.version = BillionSend::VERSION
   spec.authors = ["BillionSend"]
   spec.summary = "Ruby client for the BillionSend email API"
-  spec.description = "Send, receive and track email with BillionSend: every operation of the API, " \
-                     "retries with idempotency keys, inbox event streams and webhook verification."
+  spec.description = "Send, receive and track email with BillionSend: sending, domains, contacts, broadcasts, " \
+                     "automations, templates, webhooks and agent inboxes, with retries, idempotency keys, " \
+                     "inbox event streams and webhook verification."
   spec.homepage = "https://github.com/billionsend/billionsend-ruby"
   spec.license = "MIT"
   spec.required_ruby_version = ">= 3.1"

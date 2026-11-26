@@ -37,8 +37,8 @@ class CoverageTest < Minitest::Test
     target = path.reduce(c) { |obj, attr| obj.public_send(attr) }
     args = op.params("path").sort_by { |p| op.path.index("{#{p["name"]}}") }
                             .map { |p| Contract.example(p.fetch("schema", {})).to_s }
-    body = op.spec["requestBody"]
-    args << Contract.example(body.dig("content", "application/json", "schema"), full: false) if body
+    _, schema = op.request_body
+    args << Contract.example(schema, full: false) if schema
     kwargs = (op.params("query") + op.params("header")).select { |p| p["required"] }
                                                        .to_h { |p| [kwarg(p), Contract.example(p["schema"])] }
     result = target.public_send(name, *args, **kwargs)
@@ -50,7 +50,7 @@ class CoverageTest < Minitest::Test
     c = client
     Contract::OPERATIONS.each { |op| invoke(c, op) }
     assert_equal Contract::OPERATION_KEYS, mock.keys.to_set
-    assert_equal 139, Contract::OPERATIONS.size
+    assert_equal 186, Contract::OPERATIONS.size
   end
 
   def test_every_public_resource_method_is_an_operation
@@ -79,7 +79,7 @@ class CoverageTest < Minitest::Test
 
   def test_sending_operations_always_carry_an_idempotency_key
     keyed = Contract::OPERATIONS.select(&:idempotency_key?)
-    assert_equal 8, keyed.size
+    assert_equal 9, keyed.size
     c = client
     keyed.each { |op| invoke(c, op) }
     keys = mock.calls.map { |call| call.header("idempotency-key") }

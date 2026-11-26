@@ -31,7 +31,8 @@ module BillionSend
     #   outside the tolerance, no signature matches, or the body is not a JSON object
     # @raise [ArgumentError] +secret+ is not a webhook secret
     def self.verify(payload, headers, secret, tolerance: DEFAULT_TOLERANCE, now: nil)
-      key = secret_key(secret)
+      # A secret read from a file or the environment often ends in a newline.
+      key = secret_key(secret.to_s.strip)
       msg_id = header(headers, "webhook-id")
       timestamp = header(headers, "webhook-timestamp")
       signatures = header(headers, "webhook-signature")
@@ -68,7 +69,7 @@ module BillionSend
 
     # Key bytes of a whsec_ secret: canonical base64 of 24 to 64 bytes, else ArgumentError.
     def self.secret_key(secret)
-      raise ArgumentError, "A webhook secret starts with whsec_" unless secret.to_s.start_with?(SECRET_PREFIX)
+      raise ArgumentError, "A webhook secret starts with whsec_" unless secret.start_with?(SECRET_PREFIX)
 
       encoded = secret[SECRET_PREFIX.length..]
       key = decode64(encoded)
@@ -90,7 +91,8 @@ module BillionSend
     def self.header(headers, name)
       headers.each do |key, value|
         value = value.first if value.is_a?(Array)
-        return value.to_s if key.to_s.casecmp?(name) && !value.to_s.empty?
+        text = value.to_s.strip
+        return text if key.to_s.casecmp?(name) && !text.empty?
       end
       nil
     end

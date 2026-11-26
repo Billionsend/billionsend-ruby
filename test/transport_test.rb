@@ -12,7 +12,7 @@ class TransportTest < Minitest::Test
     thread = Thread.new do
       loop do
         socket = server.accept
-        head = +""
+        head = "".b
         head << socket.readpartial(4096) until head.include?("\r\n\r\n")
         request_line, *lines = head.split("\r\n\r\n", 2).first.split("\r\n")
         headers = lines.to_h { |l| l.split(": ", 2).then { |k, v| [k.downcase, v] } }
@@ -82,6 +82,34 @@ class TransportTest < Minitest::Test
       stream.close
       assert_equal "1", event.id
       assert_equal "text/event-stream", @requests.first[:headers]["accept"]
+    end
+  end
+
+  def test_an_upload_reaches_the_socket_byte_for_byte
+    serve(lambda do |socket, _|
+      body = '{"object":"logo","logo_url":"https://example.com/l.png"}'
+      socket.write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n" \
+                   "Content-Length: #{body.bytesize}\r\nConnection: close\r\n\r\n#{body}")
+    end) do |url|
+      bytes = (0..255).to_a.pack("C*") * 64
+      client(url).brand.logo.upload({ file: { content: bytes, filename: "l.png" } })
+      request = @requests.first
+      assert_equal "PUT /brand/logo HTTP/1.1", request[:line]
+      part = Contract.parse_multipart(request[:body], request[:headers]["content-type"]).fetch(0)
+      assert_equal bytes, part.data
+      assert_equal "image/png", part.content_type
+    end
+  end
+
+  def test_a_body_that_cannot_be_decoded_is_a_connection_error
+    serve(lambda do |socket, _|
+      socket.write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Encoding: gzip\r\n" \
+                   "Content-Length: 8\r\nConnection: close\r\n\r\nnot gzip")
+    end) do |url|
+      c = client(url, max_retries: 1)
+      c.sleeper = ->(_) {}
+      assert_raises(BillionSend::APIConnectionError) { c.domains.list }
+      assert_equal 2, @requests.size
     end
   end
 

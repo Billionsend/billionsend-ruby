@@ -36,6 +36,12 @@ class ErrorsTest < Minitest::Test
     assert_in_delta 7.0, error.retry_after
   end
 
+  def test_a_5xx_carries_retry_after
+    mock.error("GET", "/domains", 503, "unavailable", "Try later", headers: { "retry-after" => "9" })
+    error = assert_raises(BillionSend::APIError) { client(max_retries: 0).domains.list }
+    assert_in_delta 9.0, error.retry_after
+  end
+
   def test_an_error_without_a_json_body_keeps_its_text
     mock.respond("GET", "/domains", 502, body: "Bad gateway", headers: { "content-type" => "text/plain" })
     error = assert_raises(BillionSend::APIError) { client(max_retries: 0).domains.list }

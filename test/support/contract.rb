@@ -10,9 +10,9 @@ require "uri"
 #
 # 1. finds the operation (method + path template) in the snapshot, or fails;
 # 2. checks the API key header (absent only where the operation's security is empty);
-# 3. checks path, query and header parameters and validates the JSON body
-#    against the operation's schema (JSON Schema 2020-12, $ref resolved through
-#    the snapshot);
+# 3. checks path, query and header parameters and validates the body, JSON or
+#    multipart/form-data as the operation declares, against its schema (JSON
+#    Schema 2020-12, $ref resolved through the snapshot);
 # 4. answers with a queued answer, or else with an instance of the operation's
 #    success schema built from the schema itself (and validated against it).
 #
@@ -50,6 +50,12 @@ module Contract
     end
 
     def success_media = success[1]
+
+    # The media type and schema of the request body, or nil.
+    def request_body
+      media, content = spec.dig("requestBody", "content")&.first
+      media && [media, content.fetch("schema")]
+    end
 
     def idempotency_key?
       params("header").any? { |p| p["name"].casecmp?("idempotency-key") }
@@ -163,7 +169,28 @@ module Contract
     end
   end
 
-  Recorded = Struct.new(:operation, :request, :path_params, :query, :body, keyword_init: true) do
+  Part = Struct.new(:name, :filename, :content_type, :data, keyword_init: true)
+
+  # The parts of a multipart/form-data body, failing on anything malformed.
+  def self.parse_multipart(body, content_type)
+    boundary = content_type[/\Amultipart\/form-data; boundary=(\S+)\z/, 1] or
+      raise Minitest::Assertion, "not a multipart content type: #{content_type.inspect}"
+    chunks = body.b.split("--#{boundary}".b, -1)
+    unless chunks.size >= 2 && chunks.shift.empty? && chunks.pop == "--\r\n"
+      raise Minitest::Assertion, "malformed multipart body"
+    end
+
+    chunks.map do |chunk|
+      head, data = chunk.delete_prefix("\r\n").split("\r\n\r\n", 2)
+      raise Minitest::Assertion, "malformed multipart part" unless data&.end_with?("\r\n")
+
+      head = head.dup.force_encoding(Encoding::UTF_8)
+      Part.new(name: head[/ name="([^"]*)"/, 1], filename: head[/ filename="([^"]*)"/, 1],
+               content_type: head[/^Content-Type: ([^\r\n]*)/, 1], data: data.byteslice(0, data.bytesize - 2))
+    end
+  end
+
+  Recorded = Struct.new(:operation, :request, :path_params, :query, :body, :parts, keyword_init: true) do
     def header(name)
       request.headers.find { |k, _| k.casecmp?(name) }&.last
     end
@@ -227,8 +254,14 @@ module Contract
       uri = URI(request.url)
       op, path_params = Contract.find(request.method, uri.path.delete_prefix(URI(BASE_URL).path))
       query = URI.decode_www_form(uri.query || "").group_by(&:first).transform_values { |v| v.map(&:last) }
-      body = request.body && JSON.parse(request.body)
-      record = Recorded.new(operation: op, request: request, path_params: path_params, query: query, body: body)
+      record = Recorded.new(operation: op, request: request, path_params: path_params, query: query)
+      content_type = record.header("content-type")
+      if content_type&.start_with?("multipart/")
+        record.parts = Contract.parse_multipart(request.body, content_type)
+        record.body = record.parts.to_h { |p| [p.name, p.data.dup.force_encoding(Encoding::UTF_8).scrub] }
+      elsif request.body
+        record.body = JSON.parse(request.body)
+      end
       @calls << record
       check(op, record)
       queued = @queued[op.key].shift
@@ -267,12 +300,23 @@ module Contract
         raise Minitest::Assertion, "#{where}: no Idempotency-Key"
       end
       body = op.spec["requestBody"]
+      media, schema = op.request_body
+      if media && record.body && (media == "multipart/form-data") != !record.parts.nil?
+        raise Minitest::Assertion, "#{where}: the body is not #{media}"
+      end
+      record.parts&.each do |part|
+        property = Contract.resolve(schema).fetch("properties")[part.name]
+        raise Minitest::Assertion, "#{where}: unknown form field #{part.name}" unless property
+        if (property["format"] == "binary") == part.filename.nil?
+          raise Minitest::Assertion, "#{where}: #{part.name} is sent as the wrong kind of part"
+        end
+      end
       if body.nil?
         raise Minitest::Assertion, "#{where}: sends a body the operation does not take" unless record.body.nil?
       elsif record.body.nil?
         raise Minitest::Assertion, "#{where}: no body" if body["required"]
       else
-        Contract.validate!(record.body, body.dig("content", "application/json", "schema"), "#{where} body")
+        Contract.validate!(record.body, schema, "#{where} body")
       end
     end
 

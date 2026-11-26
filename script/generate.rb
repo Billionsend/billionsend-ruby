@@ -22,6 +22,7 @@ OUT = File.join(ROOT, "lib", "billionsend", "resources.rb")
 
 HTTP_METHODS = %w[get put post patch delete].freeze
 IDEMPOTENCY_KEY_HEADER = "idempotency-key"
+BODY_MEDIA = %w[application/json multipart/form-data].freeze
 # Header parameters -> keyword argument names.
 HEADER_KWARGS = { "x-batch-validation" => "batch_validation" }.freeze
 RESERVED = %w[params extra_headers timeout idempotency_key max_reconnects].freeze
@@ -35,7 +36,7 @@ WIDTH = 100
 Param = Struct.new(:name, :rb, :where, :required, keyword_init: true)
 Operation = Struct.new(:method, :path, :resource, :name, :summary, :description, :path_params,
                        :query_params, :header_params, :body, :body_required, :body_omit_when_none,
-                       :stream, :idempotency_key, :paginated, :auth, keyword_init: true)
+                       :files, :stream, :idempotency_key, :paginated, :auth, keyword_init: true)
 
 def snake(text)
   text.gsub(/([a-z0-9])([A-Z])/, '\1_\2').gsub(/[^0-9a-zA-Z]+/, "_").gsub(/\A_+|_+\z/, "").downcase
@@ -108,8 +109,13 @@ def build_operations(spec)
     abort "#{method} #{path}: path parameters do not match the template" if o.path_params.map(&:name) != order
 
     if (body = op["requestBody"])
-      schema = body.dig("content", "application/json", "schema")
-      resolved = resolve(spec, schema)
+      media, content = body.fetch("content").first
+      abort "#{op["operationId"]}: no way to send #{media}" unless BODY_MEDIA.include?(media)
+
+      resolved = resolve(spec, content.fetch("schema"))
+      if media == "multipart/form-data"
+        o.files = resolved.fetch("properties").select { |_, p| resolve(spec, p)["format"] == "binary" }.keys
+      end
       o.body = true
       o.body_required = body["required"] == true || !resolved.fetch("required", []).empty? ||
                         types_of(resolved).include?("array")
@@ -229,7 +235,9 @@ def method_lines(op)
     lines << "        )"
   else
     call = [op.method.inspect, path_expr(op), *call_args(op, "          ")]
-    if op.body
+    if op.files
+      call << "form: params" << "files: %w[#{op.files.join(" ")}]"
+    elsif op.body
       call << (op.body_required || op.body_omit_when_none ? "body: params" : "body: params.nil? ? {} : params")
     end
     call += ["idempotency_key: idempotency_key", "auto_idempotency_key: true"] if op.idempotency_key

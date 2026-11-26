@@ -31,7 +31,12 @@ module BillionSend
   # Lines may end in CRLF, LF or CR and may be split anywhere across chunks;
   # comment lines are skipped; several data lines join with newlines.
   class SSEDecoder
-    attr_reader :last_event_id, :retry_ms
+    # The position: set when a block ends (its blank line), not when its id line
+    # is read, so a block cut off midway never moves it past an event that did
+    # not arrive.
+    attr_reader :last_event_id
+
+    attr_reader :retry_ms
 
     def initialize
       @bytes = "".b
@@ -41,6 +46,7 @@ module BillionSend
       @data = []
       @event = ""
       @last_event_id = nil
+      @pending_id = nil
       @retry_ms = nil
     end
 
@@ -100,7 +106,7 @@ module BillionSend
     end
 
     def line(line)
-      return dispatch if line.empty?
+      return end_block if line.empty?
       return nil if line.start_with?(":")
 
       name, value = line.split(":", 2)
@@ -108,10 +114,16 @@ module BillionSend
       case name
       when "data" then @data << value
       when "event" then @event = value
-      when "id" then @last_event_id = value unless value.include?("\0")
+      when "id" then @pending_id = value unless value.include?("\0")
       when "retry" then @retry_ms = Integer(value, 10) if value.match?(/\A[0-9]+\z/)
       end
       nil
+    end
+
+    def end_block
+      @last_event_id = @pending_id || @last_event_id
+      @pending_id = nil
+      dispatch
     end
 
     def dispatch
@@ -219,9 +231,11 @@ module BillionSend
                 break if @closed
               end
               break if @closed
+
+              # Every event read so far was handed out: an id sent without data (the
+              # server writes one when a stream opens) moves the position too.
+              @last_event_id = decoder.last_event_id || @last_event_id
             end
-            # Every event was handed out; an id sent without data still moves the position.
-            @last_event_id = decoder.last_event_id if !@closed && decoder.last_event_id
           rescue APIConnectionError
             raise if in_block
 

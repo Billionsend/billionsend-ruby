@@ -40,6 +40,12 @@ class WebhooksTest < Minitest::Test
     end
   end
 
+  def test_whitespace_around_the_secret_and_headers_is_ignored
+    headers = HEADERS.transform_values { |value| " #{value}\n" }
+    headers["webhook-signature"] = "v1,AAAA\t\n#{SIGNATURE}"
+    assert verify(PAYLOAD, headers, "#{SECRET}\n")
+  end
+
   def test_a_changed_body_fails
     assert_raises(BillionSend::WebhookVerificationError) { verify('{"test": 2432232315}') }
   end

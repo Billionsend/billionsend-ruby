@@ -2,7 +2,7 @@
 
 The official Ruby client for the [BillionSend](https://billionsend.com) API: send and receive email, run inboxes for agents and people, manage domains, contacts, broadcasts, templates, webhooks and more.
 
-- Every operation of the API (139), named after the API's own `operationId`s.
+- Every operation of the API (186), named after the API's own `operationId`s.
 - No runtime dependencies: `net/http`, `json` and `openssl` from the standard library.
 - Sends that never go out twice, retries, auto-paging enumerators, live event streams that resume where they stopped, and webhook signature verification.
 
@@ -56,7 +56,7 @@ puts signup["inbox"]["email_address"], client.agent.status["status"]
 
 ## Sending once
 
-Every sending method (`emails.send`, `emails.batch`, `emails.receiving.reply` and `.forward`, `inboxes.send`, `inboxes.threads.emails.reply` and `.forward`, `inboxes.drafts.send`) sends an `Idempotency-Key`. Without `idempotency_key:` the call makes up one (a UUID) and reuses it for its own retries, so a retry after a dropped connection never sends the email twice. Pass your own key to stay safe across calls too, for example when a job that sends may run again:
+Every sending method (`emails.send`, `emails.batch`, `emails.receiving.reply` and `.forward`, `inboxes.send`, `inboxes.threads.emails.reply` and `.forward`, `inboxes.drafts.send`) sends an `Idempotency-Key`, and so does `events.send`, so a repeated call never records an event twice. Without `idempotency_key:` the call makes up one (a UUID) and reuses it for its own retries, so a retry after a dropped connection never sends the email twice. Pass your own key to stay safe across calls too, for example when a job that sends may run again:
 
 ```ruby
 client.emails.send(message, idempotency_key: "welcome/#{user.id}")
@@ -100,6 +100,27 @@ end
 
 Waiting for a sign-in code sent to the inbox is one call: `client.inboxes.codes.latest(inbox["id"], from: "example.com", wait: 30)`.
 
+## Uploads
+
+The two logos and a contact import go as `multipart/form-data`. The `file` field takes the bytes as a String, anything that answers `read` (a `File`, a `StringIO`, a `Pathname`, an uploaded file) or a Hash with `content:`, `filename:` and `content_type:` (the last two optional):
+
+```ruby
+require "pathname"
+
+client.brand.logo.upload({ file: Pathname.new("logo.png") })
+client.domains.unsubscribe_page.logo.upload(domain_id, { file: Pathname.new("acme.png") })
+
+File.open("contacts.csv", "rb") do |csv|
+  client.contacts.imports.create({
+    file: csv,
+    column_map: { email: "Email", first_name: "First Name" },
+    segments: [{ id: segment_id }]
+  })
+end
+```
+
+A Hash or Array in any other field (`column_map`, `segments`, `topics`) is sent as JSON. The file name is the one you give, else the file's own, else `file`; the content type follows from the name. An import runs in the background: poll `client.contacts.imports.get(id)` for its `status` and `counts`.
+
 ## Live events
 
 `client.inboxes.events.stream_inbox(inbox_id)` streams one inbox's events and `client.inboxes.events.stream` every inbox event of the team; `types:` narrows them (a name or an array). The stream is an `Enumerable`; iterating yields two kinds of events:
@@ -107,7 +128,7 @@ Waiting for a sign-in code sent to the inbox is one call: `client.inboxes.codes.
 - `BillionSend::InboxStreamEvent`: `id` (the stream position), `event` (such as `"inbox.email.received"`) and `data`, a Hash with `"type"`, `"created_at"`, `"inbox_id"` and `"data"` (the webhook payload of the same event).
 - `BillionSend::StreamGapEvent`: `event == "stream.gap"`, `id` is `nil` and `data["reason"]` says why. The stream was resumed from a position older than the 24 hours the API replays, so some events may be missing: catch up through the lists (`client.inboxes.threads.list_all(inbox_id, read: false)`) before going on. It is handed out once per position.
 
-The method opens the stream, so a refused stream (a revoked key, a key held to one inbox asking for the team's stream) raises at once. The server ends a stream every few minutes and connections drop; the stream reconnects on its own with `Last-Event-ID`, so no event is lost or repeated. Before reconnecting it waits a second (or what the server's `retry` field asks). A connection that opens starts the count again, so a quiet inbox that gets only keepalives keeps its stream however long it waits; A reconnect the API answers with a 429 or 5xx waits what its `Retry-After` asks (one over 60 seconds raises that error at once). `max_reconnects:` (default 5) bounds the reconnects in a row that fail to open: past it, iterating raises the API's error for the last one (`BillionSend::RateLimitError`, `BillionSend::APIError`), or `BillionSend::APIConnectionError` ("gave up after N reconnects") when it got no answer. An error your block raises, `APIConnectionError` included, passes through as it is and ends the iteration. A reconnect the API refuses for good, such as a revoked key, raises its own error. One inbox's stream ends after that inbox's `inbox.deleted` or `inbox.expired` event. Close the stream when done (`stream.close`).
+The method opens the stream, so a refused stream (a revoked key, a key held to one inbox asking for the team's stream) raises at once. The server ends a stream every few minutes and connections drop; the stream reconnects on its own with `Last-Event-ID`, so no event is lost or repeated. Before reconnecting it waits a second (or what the server's `retry` field asks). A connection that opens starts the count again, so a quiet inbox that gets only keepalives keeps its stream however long it waits. A reconnect the API answers with a 429 or 5xx waits what its `Retry-After` asks (one over 60 seconds raises that error at once). `max_reconnects:` (default 5) bounds the reconnects in a row that fail to open: past it, iterating raises the API's error for the last one (`BillionSend::RateLimitError`, `BillionSend::APIError`), or `BillionSend::APIConnectionError` ("gave up after N reconnects") when it got no answer. An error your block raises, `APIConnectionError` included, passes through as it is and ends the iteration. A reconnect the API refuses for good, such as a revoked key, raises its own error. One inbox's stream ends after that inbox's `inbox.deleted` or `inbox.expired` event. Close the stream when done (`stream.close`).
 
 To pick up where a process left off, keep `stream.last_event_id` and pass it back:
 
@@ -117,7 +138,7 @@ stream = client.inboxes.events.stream(last_event_id: saved_position)
 
 ## Webhooks
 
-Verify a delivery before trusting it. Pass the raw body exactly as received, the request headers and the endpoint's signing secret (`whsec_…`, shown when the webhook is created or rotated):
+Verify a delivery before trusting it. Pass the raw body exactly as received, the request headers and the endpoint's signing secret (`whsec_…`, shown when the webhook is created, or by `client.webhooks.rotate_signing_secret`):
 
 ```ruby
 # Rails; any framework works the same way
@@ -139,29 +160,36 @@ With Rack or Sinatra, `request.get_header("HTTP_WEBHOOK_ID")` and so on read the
 
 | Method | Covers |
 | --- | --- |
-| `emails` | send, batch, list, get, update, cancel, delete, insights; `emails.metrics` (see below) |
+| `emails` | send, batch, list, get, update, cancel, delete, insights, share, unshare; `emails.metrics` (see below) with `.links`, `.countries`, `.clients` |
+| `emails.attachments` | attachments of sent mail |
 | `emails.receiving` (`.attachments`) | received mail: list, get, delete, reply, forward; attachments and their extracted text |
-| `domains` | create, list, get, update, delete, verify |
-| `api_keys` | create, list, delete |
-| `contacts` (`.topics`, `.segments`, `.batch`) | create, list, get, update, delete, preferences_link; `batch.create`, `batch.get`, `batch.remove` |
+| `domains` (`.claims`, `.unsubscribe_page.logo`) | create, list, get, update, delete, verify; claim a domain; a domain's unsubscribe page logo |
+| `brand` (`.logo`) | the team's look of the recipient-facing pages: get, update; logo upload and delete |
+| `api_keys` | create, list, update, delete |
+| `contacts` (`.topics`, `.segments`, `.batch`, `.imports`) | create, list, get, update, delete, preferences_link; `batch.create`, `batch.get`, `batch.remove`; CSV imports |
 | `audiences.contacts` | contacts addressed through an audience |
 | `contact_properties`, `segments` (`.contacts`), `topics` | contact data and grouping |
-| `broadcasts` | create, list, get, update, delete, send, duplicate, cancel |
+| `broadcasts` | create, list, get, update, delete, send, duplicate, cancel, recipients, clicked_links |
+| `automations` (`.runs`) | create, list, get, update, remove, duplicate, stop, validate, simulate, metrics; runs: list, get, cancel |
+| `events` | custom events: create, list, get, update, remove, send |
 | `templates` | create, list, get, update, delete, publish, duplicate |
-| `webhooks` | create, list, get, update, delete, rotate |
-| `suppressions` (`.batch`), `unsubscribes` | suppression list (`batch.add`, `batch.remove`) and opt-outs |
+| `webhooks` (`.events`, `.events.attempts`) | create, list, get, update, delete, rotate_signing_secret; event history, replay and delivery attempts |
+| `suppressions` (`.batch`) | create, list, get, delete; `batch.add`, `batch.remove`; single addresses and whole domains |
+| `unsubscribes` | list, create |
 | `verifications` | availability, estimate, create, list, get |
 | `usage`, `deliverability` | account usage and sending health |
+| `logs` | API request logs: list, get |
+| `oauth_grants` | connected apps: list, revoke |
 | `inboxes` (`.events`) | create, list, get, update, delete, send; `events.stream`, `events.stream_inbox` |
 | `inboxes.agent`, `.safety`, `.labels`, `.codes`, `.quarantine`, `.drafts` | inbox settings, labels, verification codes, held mail, drafts |
 | `inboxes.threads` (`.labels`, `.emails`) | list, search, get, update, delete; thread labels; messages, reply and forward |
 | `agent` | signup, status, claim_email |
 
-A few resources have a method named `send` (`emails.send`, `inboxes.send`, `broadcasts.send`), as their `operationId`s say; it hides `Object#send` on those objects, so reach other methods of a resource dynamically with `public_send` or `__send__`.
+A few resources have a method named `send` (`emails.send`, `events.send`, `inboxes.send`, `broadcasts.send`), as their `operationId`s say; it hides `Object#send` on those objects, so reach other methods of a resource dynamically with `public_send` or `__send__`.
 
 Each method is named after its operation's `operationId` in the API document: `emails.receiving.attachments.list` is `client.emails.receiving.attachments.list`, with camelCase written in snake_case (`agent.claimEmail` is `client.agent.claim_email`). An `operationId` that is also the group of others is that group's `call`: `emails.metrics` (beside `emails.metrics.links`, `.countries` and `.clients`) is `client.emails.metrics.call(metrics: ["sent", "delivered"])`, or `client.emails.metrics.(…)`.
 
-Path parameters are positional (`client.domains.get(domain_id)`), the request body is a Hash (`client.domains.create({ name: "acme.dev" })`) and query parameters are keyword arguments (`client.emails.list(limit: 50)`); a list parameter takes an array. Every method also takes `extra_headers:` and `timeout:`. Anything the methods do not cover goes through `client.request("GET", "/path", query: {…})`.
+Path parameters are positional (`client.domains.get(domain_id)`), the request body is a Hash (`client.domains.create({ name: "acme.dev" })`) and query parameters are keyword arguments (`client.emails.list(limit: 50)`); a list parameter takes an array. Every method also takes `extra_headers:` and `timeout:`. An empty path parameter, `"."` or `".."` raises `ArgumentError` before anything is sent, and an empty list in a query parameter is left out. Anything the methods do not cover goes through `client.request("GET", "/path", query: {…})`.
 
 ## Pagination
 
@@ -201,20 +229,20 @@ end
 | 404 | `NotFoundError` |
 | 409 | `ConflictError` |
 | 429 | `RateLimitError` (`retry_after` in seconds) |
-| 5xx | `APIError` |
+| 5xx | `APIError` (`retry_after` in seconds, when the API sent one) |
 | no answer | `APIConnectionError`, and `APITimeoutError` (a subclass) for timeouts; `status_code` and `request_id` are `nil` |
 
-An answer that is not JSON keeps the same shape, with `name` set to `"application_error"`. `WebhookVerificationError` (`name` `"webhook_verification_error"`) is a `BillionSend::Error` too. `error.to_s` reads `"404 not_found: Domain not found"`.
+A success with no body returns `nil`. A header value with a non-ASCII or control character (an `idempotency_key:` such as `"welcome/订单-1"`) raises `BillionSend::Error` with `name` `"invalid_header"` before anything is sent. An answer that is not JSON keeps the same shape, with `name` set to `"application_error"`. `WebhookVerificationError` (`name` `"webhook_verification_error"`) is a `BillionSend::Error` too. `error.to_s` reads `"404 not_found: Domain not found"`.
 
 ## Retries
 
-A request is retried when repeating it is safe: GET, PUT and DELETE, and any request carrying an idempotency key (every send does). It is retried on 429, on 5xx, when no answer came back (connection failure, timeout), and, for a keyed request, on 409 `concurrent_idempotent_requests` (a retry that caught the first attempt still running). The wait is the answer's `Retry-After` when there is one, otherwise exponential backoff with jitter (0.5 s, 1 s, 2 s… up to 8 s). An answer asking to wait more than 60 seconds, such as a used-up daily quota, is raised at once. `max_retries:` (default 2) bounds the retries of one call; `0` turns them off.
+A 429 is retried for every request: the API answers it before it writes anything. A 5xx, no answer (connection failure, timeout) and, for a keyed request, 409 `concurrent_idempotent_requests` (a retry that caught the first attempt still running) are retried when repeating the request is safe: GET, PUT and DELETE, and any request carrying an idempotency key (every send does). An upload (a logo, a contact import) is not repeated after a 5xx or a lost answer. The wait is the answer's `Retry-After` when there is one, otherwise exponential backoff with jitter (0.5 s, 1 s, 2 s… up to 8 s). An answer asking to wait more than 60 seconds, such as a used-up daily quota, is raised at once. `max_retries:` (default 2) bounds the retries of one call; `0` turns them off.
 
 ## Configuration
 
 | Argument | Environment | Default |
 | --- | --- | --- |
-| `api_key:` | `BILLIONSEND_API_KEY` | none (only `agent.signup` works without one; any other call raises `AuthenticationError`, `missing_api_key`) |
+| `api_key:` | `BILLIONSEND_API_KEY` | none; surrounding whitespace is dropped (only `agent.signup` works without one; any other call raises `AuthenticationError`, `missing_api_key`) |
 | `base_url:` | `BILLIONSEND_BASE_URL` | `https://api.billionsend.com` |
 | `timeout:` | | `60` seconds per attempt (an event stream waits at least 60 s for each read) |
 | `max_retries:` | | `2` |
@@ -248,10 +276,10 @@ Whatever fails is what the SDK has to follow. CI runs `script/generate.rb --chec
 Publishing is manual; nothing is published on push.
 
 1. On RubyGems, the owner of the `billionsend` gem adds a Trusted Publisher (for the first version, a pending one under the account's Trusted Publishers): repository `billionsend/billionsend-ruby`, workflow `release.yml`, environment `rubygems`.
-2. Set `VERSION` in `lib/billionsend/version.rb`, turn the changelog's `Unreleased` heading into that version, commit, then tag and push: `git tag v0.1.0 && git push origin main v0.1.0`.
+2. Set `VERSION` in `lib/billionsend/version.rb`, turn the changelog's `Unreleased` heading into that version, commit, then tag and push: `git tag -a v0.2.0 -m v0.2.0 && git push origin main v0.2.0`.
 3. Actions → `release` → Run workflow, on the version tag. The workflow refuses a branch or a tag that differs from `BillionSend::VERSION`, runs every check, builds the gem and pushes it with RubyGems Trusted Publishing (no key stored).
 
-Without Trusted Publishing, the same release from a clean checkout of the tag is `gem build billionsend.gemspec && gem push billionsend-0.1.0.gem` with an API key scoped to pushing the `billionsend` gem in `GEM_HOST_API_KEY`.
+Without Trusted Publishing, the same release from a clean checkout of the tag is `gem build billionsend.gemspec && gem push billionsend-0.2.0.gem` with an API key scoped to pushing the `billionsend` gem in `GEM_HOST_API_KEY`.
 
 ## License
 
