@@ -50,7 +50,7 @@ class CoverageTest < Minitest::Test
     c = client
     Contract::OPERATIONS.each { |op| invoke(c, op) }
     assert_equal Contract::OPERATION_KEYS, mock.keys.to_set
-    assert_equal 186, Contract::OPERATIONS.size
+    assert_equal 193, Contract::OPERATIONS.size
   end
 
   def test_every_public_resource_method_is_an_operation

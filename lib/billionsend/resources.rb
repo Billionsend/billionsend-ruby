@@ -381,16 +381,18 @@ module BillionSend
 
       # Stop an automation.
       #
-      # Sets the automation to disabled: no new runs start; runs already going finish. Stopping a
-      # stopped automation answers the same.
+      # Sets the automation to disabled: no new runs start; runs already going finish, unless
+      # cancel_runs cancels them. Stopping a stopped automation answers the same, and with
+      # cancel_runs cancels what is still going, so a call cut short can be repeated.
       #
       # +POST /automations/{id}/stop+
       #
       # @return [Hash] the parsed JSON answer
-      def stop(id, extra_headers: nil, timeout: nil)
+      def stop(id, params = nil, extra_headers: nil, timeout: nil)
         @client.request(
           "POST",
           "/automations/#{Client.encode_path(id)}/stop",
+          body: params,
           extra_headers: extra_headers,
           timeout: timeout
         )
@@ -639,6 +641,142 @@ module BillionSend
         @client.request(
           "DELETE",
           "/brand/logo",
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+    end
+
+    # Operations on broadcast groups.
+    class BroadcastGroups < Base
+      # Create a broadcast group.
+      #
+      # BillionSend extension: one send from several sending domains. The group holds a broadcast
+      # per domain, all with the same content, from the same name and local part, to the same
+      # audience; each contact is mailed from one of the domains and keeps it for later sends.
+      #
+      # +POST /broadcast-groups+
+      #
+      # @return [Hash] the parsed JSON answer
+      def create(params, extra_headers: nil, timeout: nil)
+        @client.request(
+          "POST",
+          "/broadcast-groups",
+          body: params,
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+
+      # List broadcast groups.
+      #
+      # Newest first, with cursor pagination: `after` takes the last id of a page and pages toward
+      # older items, `before` takes the first id and pages back toward newer ones.
+      #
+      # +GET /broadcast-groups+
+      #
+      # @return [Hash] the parsed JSON answer
+      def list(limit: nil, after: nil, before: nil, extra_headers: nil, timeout: nil)
+        @client.request(
+          "GET",
+          "/broadcast-groups",
+          query: { "limit" => limit, "after" => after, "before" => before },
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+
+      # Every item of +list+, as an Enumerator that fetches pages as it goes. Walks in the list's
+      # own order, from +after+ (or the first page) on; pass +before+ instead to walk the other way.
+      #
+      # @return [Enumerator<Hash>]
+      def list_all(limit: nil, after: nil, before: nil, extra_headers: nil, timeout: nil)
+        Pagination.each_item(after: after, before: before) do |page_after, page_before|
+          @client.request(
+            "GET",
+            "/broadcast-groups",
+            query: { "limit" => limit, "after" => page_after, "before" => page_before },
+            extra_headers: extra_headers,
+            timeout: timeout
+          )
+        end
+      end
+
+      # Retrieve a broadcast group.
+      #
+      # +GET /broadcast-groups/{id}+
+      #
+      # @return [Hash] the parsed JSON answer
+      def get(id, extra_headers: nil, timeout: nil)
+        @client.request(
+          "GET",
+          "/broadcast-groups/#{Client.encode_path(id)}",
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+
+      # Update a broadcast group.
+      #
+      # Only while all its broadcasts are drafts. Its broadcasts are rewritten: one kept keeps its
+      # id, a new domain gets one, a removed domain's is deleted.
+      #
+      # +PATCH /broadcast-groups/{id}+
+      #
+      # @return [Hash] the parsed JSON answer
+      def update(id, params = nil, extra_headers: nil, timeout: nil)
+        @client.request(
+          "PATCH",
+          "/broadcast-groups/#{Client.encode_path(id)}",
+          body: params,
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+
+      # Delete a broadcast group.
+      #
+      # Only while all its broadcasts are drafts; they are deleted with it.
+      #
+      # +DELETE /broadcast-groups/{id}+
+      #
+      # @return [Hash] the parsed JSON answer
+      def remove(id, extra_headers: nil, timeout: nil)
+        @client.request(
+          "DELETE",
+          "/broadcast-groups/#{Client.encode_path(id)}",
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+
+      # Send a broadcast group.
+      #
+      # Every broadcast of the group passes the checks a broadcast's send passes, and the capacity
+      # plan; all are then scheduled together, or none is.
+      #
+      # +POST /broadcast-groups/{id}/send+
+      #
+      # @return [Hash] the parsed JSON answer
+      def send(id, params = nil, extra_headers: nil, timeout: nil)
+        @client.request(
+          "POST",
+          "/broadcast-groups/#{Client.encode_path(id)}/send",
+          body: params,
+          extra_headers: extra_headers,
+          timeout: timeout
+        )
+      end
+
+      # Cancel a broadcast group.
+      #
+      # +POST /broadcast-groups/{id}/cancel+
+      #
+      # @return [Hash] the parsed JSON answer
+      def cancel(id, extra_headers: nil, timeout: nil)
+        @client.request(
+          "POST",
+          "/broadcast-groups/#{Client.encode_path(id)}/cancel",
           extra_headers: extra_headers,
           timeout: timeout
         )
@@ -1378,16 +1516,36 @@ module BillionSend
     class ContactsTopics < Base
       # List contact topics.
       #
+      # Newest first, with cursor pagination: `after` takes the last id of a page and pages toward
+      # older items, `before` takes the first id and pages back toward newer ones.
+      #
       # +GET /contacts/{id}/topics+
       #
       # @return [Hash] the parsed JSON answer
-      def list(id, extra_headers: nil, timeout: nil)
+      def list(id, limit: nil, after: nil, before: nil, extra_headers: nil, timeout: nil)
         @client.request(
           "GET",
           "/contacts/#{Client.encode_path(id)}/topics",
+          query: { "limit" => limit, "after" => after, "before" => before },
           extra_headers: extra_headers,
           timeout: timeout
         )
+      end
+
+      # Every item of +list+, as an Enumerator that fetches pages as it goes. Walks in the list's
+      # own order, from +after+ (or the first page) on; pass +before+ instead to walk the other way.
+      #
+      # @return [Enumerator<Hash>]
+      def list_all(id, limit: nil, after: nil, before: nil, extra_headers: nil, timeout: nil)
+        Pagination.each_item(after: after, before: before) do |page_after, page_before|
+          @client.request(
+            "GET",
+            "/contacts/#{Client.encode_path(id)}/topics",
+            query: { "limit" => limit, "after" => page_after, "before" => page_before },
+            extra_headers: extra_headers,
+            timeout: timeout
+          )
+        end
       end
 
       # Update contact topics.
@@ -1808,6 +1966,12 @@ module BillionSend
       end
 
       # Delete an email.
+      #
+      # Deletes the email with its events, stored content and share links; an email that has not
+      # gone out also gives its volume back. An email that went out less than 7 days ago answers
+      # `409 email_recently_sent`, because bounce and complaint reports still arrive for it; the
+      # days count from the moment it was handed over for sending, whatever came of it, and the
+      # message names the earliest time it can be deleted. BillionSend extension.
       #
       # +DELETE /emails/{id}+
       #
@@ -4167,16 +4331,36 @@ module BillionSend
 
       # List topics.
       #
+      # Newest first, with cursor pagination: `after` takes the last id of a page and pages toward
+      # older items, `before` takes the first id and pages back toward newer ones.
+      #
       # +GET /topics+
       #
       # @return [Hash] the parsed JSON answer
-      def list(extra_headers: nil, timeout: nil)
+      def list(limit: nil, after: nil, before: nil, extra_headers: nil, timeout: nil)
         @client.request(
           "GET",
           "/topics",
+          query: { "limit" => limit, "after" => after, "before" => before },
           extra_headers: extra_headers,
           timeout: timeout
         )
+      end
+
+      # Every item of +list+, as an Enumerator that fetches pages as it goes. Walks in the list's
+      # own order, from +after+ (or the first page) on; pass +before+ instead to walk the other way.
+      #
+      # @return [Enumerator<Hash>]
+      def list_all(limit: nil, after: nil, before: nil, extra_headers: nil, timeout: nil)
+        Pagination.each_item(after: after, before: before) do |page_after, page_before|
+          @client.request(
+            "GET",
+            "/topics",
+            query: { "limit" => limit, "after" => page_after, "before" => page_before },
+            extra_headers: extra_headers,
+            timeout: timeout
+          )
+        end
       end
 
       # Retrieve a topic.
@@ -4692,6 +4876,11 @@ module BillionSend
       # @return [Resources::Brand]
       def brand
         @brand ||= Brand.new(self)
+      end
+
+      # @return [Resources::BroadcastGroups]
+      def broadcast_groups
+        @broadcast_groups ||= BroadcastGroups.new(self)
       end
 
       # @return [Resources::Broadcasts]

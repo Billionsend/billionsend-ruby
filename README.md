@@ -2,7 +2,7 @@
 
 The official Ruby client for the [BillionSend](https://billionsend.com) API: send and receive email, run inboxes for agents and people, manage domains, contacts, broadcasts, templates, webhooks and more.
 
-- Every operation of the API (186), named after the API's own `operationId`s.
+- Every operation of the API (193), named after the API's own `operationId`s.
 - No runtime dependencies: `net/http`, `json` and `openssl` from the standard library.
 - Sends that never go out twice, retries, auto-paging enumerators, live event streams that resume where they stopped, and webhook signature verification.
 
@@ -276,10 +276,10 @@ Whatever fails is what the SDK has to follow. CI runs `script/generate.rb --chec
 Publishing is manual; nothing is published on push.
 
 1. On RubyGems, the owner of the `billionsend` gem adds a Trusted Publisher (for the first version, a pending one under the account's Trusted Publishers): repository `billionsend/billionsend-ruby`, workflow `release.yml`, environment `rubygems`.
-2. Set `VERSION` in `lib/billionsend/version.rb`, turn the changelog's `Unreleased` heading into that version, commit, then tag and push: `git tag -a v0.2.0 -m v0.2.0 && git push origin main v0.2.0`.
+2. Set `VERSION` in `lib/billionsend/version.rb`, turn the changelog's `Unreleased` heading into that version, commit, then tag and push: `git tag -a v0.3.0 -m v0.3.0 && git push origin main v0.3.0`.
 3. Actions → `release` → Run workflow, on the version tag. The workflow refuses a branch or a tag that differs from `BillionSend::VERSION`, runs every check, builds the gem and pushes it with RubyGems Trusted Publishing (no key stored).
 
-Without Trusted Publishing, the same release from a clean checkout of the tag is `gem build billionsend.gemspec && gem push billionsend-0.2.0.gem` with an API key scoped to pushing the `billionsend` gem in `GEM_HOST_API_KEY`.
+Without Trusted Publishing, the same release from a clean checkout of the tag is `gem build billionsend.gemspec && gem push billionsend-0.3.0.gem` with an API key scoped to pushing the `billionsend` gem in `GEM_HOST_API_KEY`.
 
 ## License
 
